@@ -1,12 +1,17 @@
 # Linux Codex/Claude Code TTS Announcements
 
-TTS announcement hooks for Codex and Claude Code AI agents on Linux. This repository contains scripts that automatically install text-to-speech announcements when codex or claudecode are detected in the system.
+TTS announcement hooks for Codex and Claude Code AI agents on Linux. This repository installs notify hooks that call `codex-agent-tracker` for start, finish, attention, and danger announcements.
 
 ## What it does
 
-When installed, this repo detects whether `codex` or `claude` (Claude Code) binaries exist on PATH, then installs TTS-aware wrapper scripts at:
-- `$HOME/.config/codex-tts-hooks/` — wraps codex calls with announcements
-- `$HOME/.config/claude-tts-hooks/` — wraps claude code calls with announcements
+When installed, this repo:
+
+- copies hook code to `$HOME/.local/share/codex-claude-tts-announcements/`
+- writes a generated Codex `notify = [...]` block in `$HOME/.codex/config.toml`
+- adds generated Claude Code hook commands to `$HOME/.claude/settings.json`
+- removes the retired Agent Command Center `notify_agent.py` hook entries
+
+It does not replace or symlink the `codex` or `claude` binaries.
 
 ## Prerequisites
 
@@ -16,16 +21,12 @@ When installed, this repo detects whether `codex` or `claude` (Claude Code) bina
 ## Installation
 
 ```bash
-# User-level install (skips root-only steps):
 bash install.sh
-
-# Full install including apt packages:
-sudo bash install.sh
 ```
 
 ## Integration with Agent Command Center
 
-The agent command_center repository's installer can automatically clone and run this TTS repo as part of its local agent setup. See `agent_command_center/scripts/install_standalone.sh` for integration details.
+The Agent Command Center repository can clone and run this installer when `AGENT_COMMAND_CENTER_INSTALL_TTS_ANNOUNCEMENTS=1` is set. See `agent_command_center/scripts/install_standalone.sh` for integration details.
 
 ## Disclaimer
 
