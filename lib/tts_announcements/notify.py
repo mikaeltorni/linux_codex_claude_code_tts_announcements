@@ -3,6 +3,19 @@
 The module accepts Codex notify JSON as the first CLI argument and Claude Code
 hook JSON on stdin. It delegates speech and title updates to
 ``codex-agent-tracker`` so announcement wording remains centralized there.
+
+Components:
+  - RuntimeContext: Immutable resolved metadata for one hook event.
+  - parse_payload: Decode a Codex argv or Claude stdin JSON payload.
+  - context_for: Build a RuntimeContext from a payload and the environment.
+  - announce / clarify / update_title / notify_turn_complete: Tracker actions.
+  - transcript_prompt: Extract the latest user prompt from a Claude transcript.
+  - danger_reason: Detect destructive shell commands in a Claude tool payload.
+  - handle_codex / handle_claude: Route a decoded payload to tracker actions.
+  - main: CLI entry point for both Codex and Claude hook styles.
+
+Diagnostic logging is delegated to :mod:`tts_announcements.logging_utils`; all
+log lines from this module use the ``"notify"`` component tag.
 """
 
 from __future__ import annotations
@@ -13,13 +26,19 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from . import logging_utils as log
 
+#: Component tag applied to every log line emitted by this module.
+LOG_COMPONENT = "notify"
+
+#: Default voice used for clarification/attention prompts when none is configured.
 DEFAULT_CLARIFY_VOICE = "af_jessica"
+#: Default voice used for destructive-command warnings when none is configured.
 DEFAULT_DANGER_VOICE = "am_onyx"
+#: Matches shell commands considered destructive enough to warrant a spoken warning.
 DESTRUCTIVE_COMMAND_RE = re.compile(
     r"(?ix)"
     r"\b(rm\s+-[^\n;&|]*r[^\n;&|]*\s+(?:/|~|\$HOME)|"
@@ -33,7 +52,16 @@ DESTRUCTIVE_COMMAND_RE = re.compile(
 
 @dataclass(frozen=True)
 class RuntimeContext:
-    """Resolved runtime metadata for an incoming hook event."""
+    """Resolved runtime metadata for an incoming hook event.
+
+    Attributes:
+        label: Agent label used in announcements (e.g. ``"codex"`` or ``"claude"``).
+        project_name: Human-readable project name spoken in announcements.
+        project_path: Filesystem path of the active project.
+        voice: Configured TTS voice id, or an empty string to use the default.
+        codex_home: Path to the agent's home/config directory.
+        model_name: Optional model name to mention in announcements; ``""`` to omit.
+    """
 
     label: str
     project_name: str
@@ -43,28 +71,31 @@ class RuntimeContext:
     model_name: str = ""
 
 
-def log_dir(home: Path | None = None) -> Path:
-    """Return the repository-local log directory used by ACC."""
-    configured = os.environ.get("AGENT_COMMAND_CENTER_LOG_DIR", "")
-    if configured:
-        return Path(configured).expanduser()
-    return (home or Path.home()) / "projects" / "agent_command_center" / ".log"
-
-
 def append_log(message: str, home: Path | None = None) -> None:
-    """Append a best-effort diagnostic line to the notify log."""
-    try:
-        path = log_dir(home) / "notify.log"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().isoformat(timespec="seconds")
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(f"{timestamp} {message}\n")
-    except Exception:
-        pass
+    """Append a best-effort diagnostic line to the notify log.
+
+    Thin backward-compatible wrapper that records at INFO level through the
+    centralized logging utility.
+
+    Args:
+        message: The diagnostic text to record (kept to a single line).
+        home: Optional base home directory forwarded to the logger; ``None``
+            uses the current user's home directory.
+
+    Returns:
+        None.
+    """
+    log.info(message, component=LOG_COMPONENT, home=home)
 
 
 def tracker_path() -> Path:
-    """Return the preferred codex-agent-tracker executable path."""
+    """Return the preferred ``codex-agent-tracker`` executable path.
+
+    Returns:
+        Path: ``~/.local/bin/codex-agent-tracker`` when that file exists,
+        otherwise the bare command name ``codex-agent-tracker`` to be resolved
+        via ``PATH``.
+    """
     local = Path.home() / ".local/bin/codex-agent-tracker"
     if local.is_file():
         return local
@@ -72,7 +103,15 @@ def tracker_path() -> Path:
 
 
 def run_tracker(args: list[str]) -> bool:
-    """Run ``codex-agent-tracker`` with ``args`` and suppress hook output."""
+    """Run ``codex-agent-tracker`` with ``args`` and suppress hook output.
+
+    Args:
+        args: Argument vector appended after the tracker executable path.
+
+    Returns:
+        bool: ``True`` if the tracker exited with status 0, ``False`` if it
+        exited non-zero or could not be launched.
+    """
     try:
         result = subprocess.run(
             [str(tracker_path()), *args],
@@ -80,37 +119,78 @@ def run_tracker(args: list[str]) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-    except Exception:
+    except Exception as exc:
+        log.error(f"tracker launch failed: {exc}", component=LOG_COMPONENT)
         return False
-    return result.returncode == 0
+    if result.returncode != 0:
+        log.warn(
+            f"tracker exited {result.returncode} for args {args[:1]}",
+            component=LOG_COMPONENT,
+        )
+        return False
+    log.debug(f"tracker ok for args {args[:1]}", component=LOG_COMPONENT)
+    return True
 
 
 def parse_payload(argv: list[str], stdin_text: str | None = None) -> dict[str, Any]:
-    """Parse a Codex argv payload or Claude stdin payload."""
+    """Parse a Codex argv payload or Claude stdin payload.
+
+    Args:
+        argv: Process argument vector; ``argv[1]`` is treated as a Codex JSON
+            payload when present and non-blank.
+        stdin_text: Optional pre-read stdin contents (used by tests). When
+            ``None`` and no argv payload is present, stdin is read directly.
+
+    Returns:
+        dict[str, Any]: The decoded JSON object, or an empty dict when no
+        payload is present or the payload is not a JSON object.
+    """
     raw = argv[1] if len(argv) > 1 and argv[1].strip() else stdin_text
     if raw is None:
         try:
             raw = sys.stdin.read()
-        except Exception:
+        except Exception as exc:
+            log.error(f"stdin read failed: {exc}", component=LOG_COMPONENT)
             raw = ""
     raw = raw.strip()
     if not raw:
+        log.debug("empty payload", component=LOG_COMPONENT)
         return {}
     try:
         payload = json.loads(raw)
     except ValueError:
-        append_log(f"invalid payload {raw[:120]!r}")
+        log.warn(f"invalid payload {raw[:120]!r}", component=LOG_COMPONENT)
         return {}
     return payload if isinstance(payload, dict) else {}
 
 
 def normalize_text(value: str) -> str:
-    """Collapse repeated whitespace for spoken labels."""
+    """Collapse repeated whitespace for spoken labels.
+
+    Args:
+        value: Raw text to normalize; ``None``-like falsy values are treated as
+            an empty string.
+
+    Returns:
+        str: ``value`` with runs of whitespace collapsed to single spaces and
+        leading/trailing whitespace removed.
+    """
     return " ".join((value or "").split())
 
 
 def project_name_from(payload: dict[str, Any]) -> str:
-    """Resolve a human project name from environment metadata or cwd."""
+    """Resolve a human project name from environment metadata or cwd.
+
+    Resolution order: ``CODEX_AGENT_PROJECT_NAME`` env var, then the basename of
+    ``CODEX_AGENT_PROJECT_PATH`` or the payload ``cwd``.
+
+    Args:
+        payload: Decoded hook payload; its ``cwd`` field is used as a fallback.
+
+    Returns:
+        str: The resolved project name, or an empty string when none can be
+        determined.
+    """
     name = normalize_text(os.environ.get("CODEX_AGENT_PROJECT_NAME", ""))
     if name:
         return name
@@ -124,7 +204,18 @@ def project_name_from(payload: dict[str, Any]) -> str:
 
 
 def context_for(payload: dict[str, Any], default_label: str) -> RuntimeContext:
-    """Build runtime context from payload and environment."""
+    """Build runtime context from payload and environment.
+
+    Args:
+        payload: Decoded hook payload; its ``cwd`` field contributes to the
+            resolved project path and name.
+        default_label: Label to use when ``CODEX_AGENT_LABEL`` is unset; also
+            selects the default home directory (``.claude`` for ``"claude"``,
+            otherwise ``.codex``).
+
+    Returns:
+        RuntimeContext: Fully resolved, immutable context for the event.
+    """
     project_path = os.environ.get("CODEX_AGENT_PROJECT_PATH", "")
     cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else ""
     label = normalize_text(os.environ.get("CODEX_AGENT_LABEL", "")) or default_label
@@ -134,7 +225,8 @@ def context_for(payload: dict[str, Any], default_label: str) -> RuntimeContext:
         or os.environ.get("CLAUDE_CODE_TTS_VOICE")
         or ""
     )
-    codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / (".claude" if default_label == "claude" else ".codex"))
+    default_home = Path.home() / (".claude" if default_label == "claude" else ".codex")
+    codex_home = Path(os.environ.get("CODEX_HOME") or default_home)
     model_name = normalize_text(os.environ.get("CODEX_AGENT_LMSTUDIO_MODEL", ""))
     return RuntimeContext(
         label=label,
@@ -147,7 +239,17 @@ def context_for(payload: dict[str, Any], default_label: str) -> RuntimeContext:
 
 
 def announce(event: str, context: RuntimeContext, task_description: str = "") -> bool:
-    """Ask the tracker to speak a start or finish announcement."""
+    """Ask the tracker to speak a start or finish announcement.
+
+    Args:
+        event: Announcement event keyword, typically ``"start"`` or ``"finish"``.
+        context: Resolved runtime context supplying label, project, and voice.
+        task_description: Optional task summary spoken on finish; omitted when
+            empty.
+
+    Returns:
+        bool: ``True`` when the tracker reported success, ``False`` otherwise.
+    """
     args = [
         "announce",
         "--event",
@@ -171,7 +273,15 @@ def announce(event: str, context: RuntimeContext, task_description: str = "") ->
 
 
 def clarify(context: RuntimeContext, question: str) -> bool:
-    """Ask the tracker to speak a clarification or attention prompt."""
+    """Ask the tracker to speak a clarification or attention prompt.
+
+    Args:
+        context: Resolved runtime context supplying label and project metadata.
+        question: The text to speak as the attention/clarification prompt.
+
+    Returns:
+        bool: ``True`` when the tracker reported success, ``False`` otherwise.
+    """
     voice = os.environ.get("CLAUDE_CLARIFY_VOICE", "").strip() or DEFAULT_CLARIFY_VOICE
     return run_tracker(
         [
@@ -193,7 +303,15 @@ def clarify(context: RuntimeContext, question: str) -> bool:
 
 
 def update_title(prompt: str, context: RuntimeContext) -> bool:
-    """Ask the tracker to update the terminal title for a submitted prompt."""
+    """Ask the tracker to update the terminal title for a submitted prompt.
+
+    Args:
+        prompt: The submitted user prompt; whitespace is normalized before use.
+        context: Resolved runtime context supplying the project path and home.
+
+    Returns:
+        bool: ``True`` when the tracker reported success, ``False`` otherwise.
+    """
     args = [
         "title",
         "--prompt",
@@ -213,20 +331,43 @@ def update_title(prompt: str, context: RuntimeContext) -> bool:
 
 
 def notify_turn_complete(status: int = 0) -> bool:
-    """Tell the tracker that a directly tracked Codex turn completed."""
+    """Tell the tracker that a directly tracked Codex turn completed.
+
+    Args:
+        status: Exit status of the completed turn; ``0`` indicates success.
+
+    Returns:
+        bool: ``True`` when the tracker reported success. ``False`` when no
+        ``CODEX_AGENT_RUN_ID`` token is set (nothing to report) or the tracker
+        failed.
+    """
     token = os.environ.get("CODEX_AGENT_RUN_ID", "")
     if not token:
+        log.debug("no run token; skipping turn-complete", component=LOG_COMPONENT)
         return False
     return run_tracker(["turn-complete", "--status", str(status), "--token", token])
 
 
 def transcript_prompt(transcript_path: str) -> str:
-    """Return the latest real user prompt from a Claude transcript JSONL."""
+    """Return the latest real user prompt from a Claude transcript JSONL.
+
+    Scans the transcript from the end, skipping sidechain entries, tool-result
+    turns, and synthetic messages that begin with ``<``.
+
+    Args:
+        transcript_path: Filesystem path to the Claude transcript ``.jsonl``
+            file. An empty string yields an empty result.
+
+    Returns:
+        str: The most recent genuine user prompt text, or an empty string when
+        none is found or the file cannot be read.
+    """
     if not transcript_path:
         return ""
     try:
         lines = Path(transcript_path).read_text(encoding="utf-8").splitlines()
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        log.warn(f"transcript read failed: {exc}", component=LOG_COMPONENT)
         return ""
     for raw in reversed(lines):
         try:
@@ -258,7 +399,16 @@ def transcript_prompt(transcript_path: str) -> str:
 
 
 def danger_reason(payload: dict[str, Any]) -> str:
-    """Return a short reason when a Claude tool payload looks destructive."""
+    """Return a short reason when a Claude tool payload looks destructive.
+
+    Args:
+        payload: Decoded Claude ``PreToolUse`` payload; the ``tool_input.command``
+            string is matched against :data:`DESTRUCTIVE_COMMAND_RE`.
+
+    Returns:
+        str: The matched destructive command fragment (whitespace-normalized),
+        or an empty string when the payload is not destructive.
+    """
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
         return ""
@@ -270,20 +420,44 @@ def danger_reason(payload: dict[str, Any]) -> str:
 
 
 def handle_codex(payload: dict[str, Any]) -> int:
-    """Handle Codex notify payloads."""
+    """Handle Codex notify payloads.
+
+    Args:
+        payload: Decoded Codex notify JSON object.
+
+    Returns:
+        int: Always ``0`` (hook exit code; notify hooks never fail the run).
+    """
     event_type = payload.get("type")
     context = context_for(payload, "codex")
-    append_log(f"{context.label} type={event_type} cwd={payload.get('cwd')}")
+    log.info(
+        f"{context.label} type={event_type} cwd={payload.get('cwd')}",
+        component=LOG_COMPONENT,
+    )
     if event_type == "agent-turn-complete":
         notify_turn_complete(int(payload.get("status", 0) or 0))
     return 0
 
 
 def handle_claude(payload: dict[str, Any]) -> int:
-    """Handle Claude Code hook payloads."""
+    """Handle Claude Code hook payloads.
+
+    Routes the ``hook_event_name`` to the matching tracker action: session
+    start/finish announcements, terminal title updates, attention prompts, and
+    destructive-command warnings.
+
+    Args:
+        payload: Decoded Claude Code hook JSON object.
+
+    Returns:
+        int: Always ``0`` (hook exit code; notify hooks never fail the run).
+    """
     event = payload.get("hook_event_name", "")
     context = context_for(payload, "claude")
-    append_log(f"Claude event={event} project={context.project_name} cwd={payload.get('cwd')}")
+    log.info(
+        f"Claude event={event} project={context.project_name} cwd={payload.get('cwd')}",
+        component=LOG_COMPONENT,
+    )
 
     if event == "SessionStart":
         announce("start", context)
@@ -298,6 +472,7 @@ def handle_claude(payload: dict[str, Any]) -> int:
     elif event == "PreToolUse":
         reason = danger_reason(payload)
         if reason:
+            log.warn(f"destructive command detected: {reason}", component=LOG_COMPONENT)
             voice = os.environ.get("CLAUDE_DANGER_VOICE", "").strip() or DEFAULT_DANGER_VOICE
             run_tracker(
                 [
@@ -314,7 +489,16 @@ def handle_claude(payload: dict[str, Any]) -> int:
 
 
 def main(argv: list[str] | None = None, stdin_text: str | None = None) -> int:
-    """CLI entry point for both Codex and Claude hook styles."""
+    """CLI entry point for both Codex and Claude hook styles.
+
+    Args:
+        argv: Process argument vector; defaults to ``sys.argv`` when ``None``.
+        stdin_text: Optional pre-read stdin contents (used by tests); ``None``
+            reads stdin on demand.
+
+    Returns:
+        int: Process exit code, always ``0`` so a hook never fails the agent run.
+    """
     argv = argv if argv is not None else sys.argv
     payload = parse_payload(argv, stdin_text=stdin_text)
     if not payload:
