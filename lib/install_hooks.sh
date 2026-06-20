@@ -15,6 +15,29 @@ tts_hook_command() {
   printf 'python3 %s/scripts/notify_agent.py' "$(tts_install_root)"
 }
 
+tts_bin_dir() {
+  printf '%s\n' "${TTS_BIN_DIR:-$(tts_target_home)/.local/bin}"
+}
+
+# Install the standalone Agent TTS (ATTS) speech engine and its `agent-tts`
+# launcher. The engine owns all speech (synthesis, playback, speed/volume/silent
+# tunables, voice selection, wording); runtimes such as agent_command_center
+# delegate to the installed `agent-tts` binary.
+install_agent_tts_engine() {
+  local root bin
+  root="$(tts_install_root)"
+  bin="$(tts_bin_dir)"
+  mkdir -p "$root/lib/agent_tts" "$root/scripts" "$bin"
+  install -m 0644 "$SCRIPT_DIR/lib/agent_tts/__init__.py" "$root/lib/agent_tts/__init__.py"
+  install -m 0644 "$SCRIPT_DIR/lib/agent_tts/engine.py" "$root/lib/agent_tts/engine.py"
+  install -m 0644 "$SCRIPT_DIR/lib/agent_tts/cli.py" "$root/lib/agent_tts/cli.py"
+  install -m 0755 "$SCRIPT_DIR/scripts/agent-tts" "$root/scripts/agent-tts"
+  # The entrypoint resolves its bundled package relative to its real path, so a
+  # symlink in PATH keeps finding `$root/lib`.
+  ln -sf "$root/scripts/agent-tts" "$bin/agent-tts"
+  tts_msg "Installed agent-tts engine to $root and linked $bin/agent-tts"
+}
+
 install_tts_hook_files() {
   local root
   root="$(tts_install_root)"
