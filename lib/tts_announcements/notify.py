@@ -10,7 +10,6 @@ Components:
   - context_for: Build a RuntimeContext from a payload and the environment.
   - announce / clarify / update_title / notify_turn_complete: Tracker actions.
   - transcript_prompt: Extract the latest user prompt from a Claude transcript.
-  - danger_reason: Detect destructive shell commands in a Claude tool payload.
   - handle_codex / handle_claude: Route a decoded payload to tracker actions.
   - main: CLI entry point for both Codex and Claude hook styles.
 
@@ -22,7 +21,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -36,18 +34,6 @@ LOG_COMPONENT = "notify"
 
 #: Default voice used for clarification/attention prompts when none is configured.
 DEFAULT_CLARIFY_VOICE = "af_jessica"
-#: Default voice used for destructive-command warnings when none is configured.
-DEFAULT_DANGER_VOICE = "am_onyx"
-#: Matches shell commands considered destructive enough to warrant a spoken warning.
-DESTRUCTIVE_COMMAND_RE = re.compile(
-    r"(?ix)"
-    r"\b(rm\s+-[^\n;&|]*r[^\n;&|]*\s+(?:/|~|\$HOME)|"
-    r"git\s+push\s+--force|"
-    r"git\s+reset\s+--hard|"
-    r"mkfs(?:\.[a-z0-9]+)?\s|"
-    r"dd\s+.*\bof=/dev/|"
-    r"chmod\s+-R\s+777\s+(?:/|~|\$HOME))"
-)
 
 
 @dataclass(frozen=True)
@@ -398,27 +384,6 @@ def transcript_prompt(transcript_path: str) -> str:
     return ""
 
 
-def danger_reason(payload: dict[str, Any]) -> str:
-    """Return a short reason when a Claude tool payload looks destructive.
-
-    Args:
-        payload: Decoded Claude ``PreToolUse`` payload; the ``tool_input.command``
-            string is matched against :data:`DESTRUCTIVE_COMMAND_RE`.
-
-    Returns:
-        str: The matched destructive command fragment (whitespace-normalized),
-        or an empty string when the payload is not destructive.
-    """
-    tool_input = payload.get("tool_input")
-    if not isinstance(tool_input, dict):
-        return ""
-    command = tool_input.get("command", "")
-    if not isinstance(command, str):
-        return ""
-    match = DESTRUCTIVE_COMMAND_RE.search(command)
-    return normalize_text(match.group(0)) if match else ""
-
-
 def handle_codex(payload: dict[str, Any]) -> int:
     """Handle Codex notify payloads.
 
@@ -443,8 +408,7 @@ def handle_claude(payload: dict[str, Any]) -> int:
     """Handle Claude Code hook payloads.
 
     Routes the ``hook_event_name`` to the matching tracker action: session
-    start/finish announcements, terminal title updates, attention prompts, and
-    destructive-command warnings.
+    start/finish announcements, terminal title updates, and attention prompts.
 
     Args:
         payload: Decoded Claude Code hook JSON object.
@@ -460,7 +424,15 @@ def handle_claude(payload: dict[str, Any]) -> int:
     )
 
     if event == "SessionStart":
-        announce("start", context)
+        # Claude Code re-fires SessionStart on resume/compact/clear, not just for
+        # a genuinely new session. Announcing on those replays the "started"
+        # chime minutes after the real start (and again after every context
+        # compaction), so only a true startup is announced.
+        source = str(payload.get("source", "startup"))
+        if source == "startup":
+            announce("start", context)
+        else:
+            log.debug(f"skip start announce for source={source}", component=LOG_COMPONENT)
     elif event in {"Stop", "SubagentStop"}:
         task = transcript_prompt(str(payload.get("transcript_path", "")))
         announce("finish", context, task_description=task)
@@ -469,22 +441,6 @@ def handle_claude(payload: dict[str, Any]) -> int:
     elif event == "Notification":
         message = normalize_text(str(payload.get("message", ""))) or "Claude needs your attention"
         clarify(context, message)
-    elif event == "PreToolUse":
-        reason = danger_reason(payload)
-        if reason:
-            log.warn(f"destructive command detected: {reason}", component=LOG_COMPONENT)
-            voice = os.environ.get("CLAUDE_DANGER_VOICE", "").strip() or DEFAULT_DANGER_VOICE
-            run_tracker(
-                [
-                    "voice",
-                    "--text",
-                    f"Warning. Claude is about to run {reason}",
-                    "--voice",
-                    voice,
-                    "--codex-home",
-                    str(context.codex_home),
-                ]
-            )
     return 0
 
 

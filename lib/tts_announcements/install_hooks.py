@@ -173,7 +173,14 @@ def configure_claude_hooks(settings_file: Path, command: str) -> None:
     ensure_command("SubagentStop")
     ensure_command("UserPromptSubmit")
     ensure_command("Notification")
-    ensure_command("PreToolUse", "Bash|Write|Edit|NotebookEdit")
+
+    # Retired events: prune any previously generated command and drop the event
+    # key when nothing else uses it, so reruns clean up the old wiring. The
+    # destructive-command PreToolUse warning was removed by request.
+    for retired in ("PreToolUse",):
+        _prune_generated(hooks, retired, generated_commands)
+        if not hooks.get(retired):
+            hooks.pop(retired, None)
 
     settings_file.parent.mkdir(parents=True, exist_ok=True)
     settings_file.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")

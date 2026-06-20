@@ -37,7 +37,28 @@ def test_claude_stop_routes_finish_announcement(monkeypatch, tmp_path):
     assert calls[0][-2:] == ["--task-description", "ship hooks"]
 
 
-def test_pre_tool_use_warns_for_destructive_command(monkeypatch):
+def test_session_start_startup_announces(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+
+    payload = {"hook_event_name": "SessionStart", "source": "startup", "cwd": "/repo/demo"}
+    assert notify.handle_claude(payload) == 0
+    assert calls and calls[0][:3] == ["announce", "--event", "start"]
+
+
+def test_session_start_resume_or_compact_is_silent(monkeypatch):
+    """Resume/compact/clear re-fire SessionStart and must not replay the start chime."""
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+
+    for source in ("resume", "compact", "clear"):
+        payload = {"hook_event_name": "SessionStart", "source": source, "cwd": "/repo/demo"}
+        assert notify.handle_claude(payload) == 0
+    assert calls == []
+
+
+def test_pre_tool_use_is_silent(monkeypatch):
+    """The destructive-command warning was removed; PreToolUse must do nothing."""
     calls = []
     monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
 
@@ -46,8 +67,7 @@ def test_pre_tool_use_warns_for_destructive_command(monkeypatch):
         "tool_input": {"command": "rm -rf $HOME"},
     }
     assert notify.handle_claude(payload) == 0
-    assert calls[0][0] == "voice"
-    assert "rm -rf $HOME" in calls[0][2]
+    assert calls == []
 
 
 def test_main_accepts_claude_stdin_payload(monkeypatch):
