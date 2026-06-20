@@ -59,3 +59,10 @@ def test_installer_writes_config_hooks_without_replacing_binaries(tmp_path):
     assert "echo keep" in stop_commands
     assert any("codex-claude-tts-announcements/scripts/notify_agent.py" in command for command in stop_commands)
     assert "/old/notify_agent.py" not in stop_commands
+
+
+def test_install_hook_shell_delegates_config_mutation_to_python_module():
+    helper = (ROOT / "lib/install_hooks.sh").read_text(encoding="utf-8")
+
+    assert "tts_announcements.install_hooks" in helper
+    assert "python3 - <<'PY'" not in helper
