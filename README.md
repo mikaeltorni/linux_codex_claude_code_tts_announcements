@@ -2,6 +2,26 @@
 
 TTS announcement hooks for Codex and Claude Code AI agents on Linux. This repository installs notify hooks that call `codex-agent-tracker` for start, finish, attention, and danger announcements.
 
+## Repository dependencies
+
+Unlike the other setup repositories, this one is **not** standalone — it is a
+*plugin* of the Agent Command Center:
+
+- **Runtime (hard):**
+  [`agent_command_center`](https://github.com/mikaeltorni/agent_command_center)
+  must be installed. The hooks installed here call its `codex-agent-tracker`
+  binary to speak announcements, and logging defaults to ACC's log directory.
+  Without the tracker, the installed hooks have nothing to call.
+- **Build-time (soft):** the shared installer component framework
+  [`linux_installation_scripts_functions`](https://github.com/mikaeltorni/linux_installation_scripts_functions) —
+  loaded from a sibling checkout when present, otherwise downloaded on demand.
+
+In the desktop setup chain this repository is installed *by* Agent Command
+Center (its optional `tts_announcements` component), never on its own.
+
+See the full cross-repository map in
+[installation_scripts/DEPENDENCIES.md](https://github.com/mikaeltorni/installation_scripts/blob/master/DEPENDENCIES.md).
+
 ## What it does
 
 When installed, this repo:
