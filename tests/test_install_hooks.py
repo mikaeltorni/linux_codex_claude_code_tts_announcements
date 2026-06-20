@@ -47,7 +47,10 @@ def test_installer_writes_config_hooks_without_replacing_binaries(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert (home / ".local/share/codex-claude-tts-announcements/scripts/notify_agent.py").is_file()
+    install_root = home / ".local/share/codex-claude-tts-announcements"
+    assert (install_root / "scripts/notify_agent.py").is_file()
+    # logging_utils backs the relative import in notify.py; it must ship too.
+    assert (install_root / "lib/tts_announcements/logging_utils.py").is_file()
     written_codex = codex_config.read_text(encoding="utf-8")
     assert "BEGIN TTS ANNOUNCEMENTS NOTIFY" in written_codex
     assert "/old/notify_agent.py" not in written_codex
