@@ -77,3 +77,34 @@ def test_main_accepts_claude_stdin_payload(monkeypatch):
 
     assert notify.main(["notify_agent.py"], stdin_text=payload) == 0
     assert calls[0][0] == "clarify"
+
+
+def test_clarify_uses_only_supported_tracker_arguments(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+    context = notify.RuntimeContext(
+        label="claude",
+        project_name="demo",
+        project_path="/repo/demo",
+        voice="",
+        codex_home=Path("/home/test/.claude"),
+    )
+
+    assert notify.clarify(context, "needs input") is True
+    assert "--label" not in calls[0]
+
+
+def test_codex_permission_request_routes_attention_announcement(monkeypatch):
+    calls = []
+    monkeypatch.setenv("CODEX_AGENT_LABEL", "codex")
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+
+    payload = {
+        "hook_event_name": "PermissionRequest",
+        "cwd": "/repo/demo",
+        "tool_name": "Bash",
+    }
+
+    assert notify.handle_claude(payload) == 0
+    assert calls[0][0] == "clarify"
+    assert calls[0][calls[0].index("--question") + 1] == "Codex needs your attention"
