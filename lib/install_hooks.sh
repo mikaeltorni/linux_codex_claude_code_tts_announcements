@@ -50,13 +50,16 @@ install_tts_hook_files() {
 }
 
 configure_codex_notify_hook() {
-  local home config_file command
+  local home config_file hooks_file command attention_command
   home="$(tts_target_home)"
   config_file="${CODEX_CONFIG_FILE:-$home/.codex/config.toml}"
+  hooks_file="${CODEX_HOOKS_FILE:-$home/.codex/hooks.json}"
   command="$(tts_hook_command)"
+  attention_command="env CODEX_AGENT_LABEL=codex $command"
   mkdir -p "$(dirname "$config_file")"
   PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks codex "$config_file" "$command"
-  tts_msg "Configured Codex notify hook in $config_file"
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks codex-hooks "$hooks_file" "$attention_command"
+  tts_msg "Configured Codex notify hooks in $config_file and $hooks_file"
 }
 
 configure_claude_notify_hooks() {

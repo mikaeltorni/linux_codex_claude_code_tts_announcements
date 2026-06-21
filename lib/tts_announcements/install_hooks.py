@@ -2,6 +2,7 @@
 
 Components:
   - configure_codex_notify: Write the generated Codex notify block.
+  - configure_codex_hooks: Merge the Codex attention lifecycle hook.
   - configure_claude_hooks: Merge generated Claude hook commands.
   - build_parser: Construct the install-hook CLI argument parser.
   - main: CLI entrypoint used by lib/install_hooks.sh.
@@ -70,6 +71,58 @@ def configure_codex_notify(config_file: Path, command: str) -> None:
     config_file.parent.mkdir(parents=True, exist_ok=True)
     config_file.write_text(updated.rstrip() + "\n", encoding="utf-8")
     log.info(f"wrote Codex notify block to {config_file}", component=LOG_COMPONENT)
+
+
+def configure_codex_hooks(hooks_file: Path, command: str) -> None:
+    """Merge a Codex ``PermissionRequest`` attention hook.
+
+    Existing hook events and user-authored handlers are preserved. A previously
+    generated attention handler is replaced so repeated installs remain
+    idempotent.
+
+    Args:
+        hooks_file: User-level Codex ``hooks.json`` path.
+        command: Hook command that reads the lifecycle payload from stdin.
+    """
+    settings = _read_settings(hooks_file)
+    hooks = settings.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        hooks = {}
+        settings["hooks"] = hooks
+
+    event = "PermissionRequest"
+    entries = hooks.get(event, [])
+    if not isinstance(entries, list):
+        entries = []
+    kept = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+            kept.append(entry)
+            continue
+        handlers = [
+            handler
+            for handler in entry["hooks"]
+            if not (
+                isinstance(handler, dict)
+                and isinstance(handler.get("command"), str)
+                and "codex-claude-tts-announcements/scripts/notify_agent.py" in handler["command"]
+            )
+        ]
+        if handlers:
+            updated = dict(entry)
+            updated["hooks"] = handlers
+            kept.append(updated)
+
+    kept.append(
+        {
+            "matcher": "",
+            "hooks": [{"type": "command", "command": command, "timeout": 10}],
+        }
+    )
+    hooks[event] = kept
+    hooks_file.parent.mkdir(parents=True, exist_ok=True)
+    hooks_file.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    log.info(f"merged Codex attention hook into {hooks_file}", component=LOG_COMPONENT)
 
 
 def _read_settings(settings_file: Path) -> dict[str, Any]:
@@ -202,6 +255,10 @@ def build_parser() -> argparse.ArgumentParser:
     codex.add_argument("config_file", type=Path)
     codex.add_argument("command")
 
+    codex_hooks = subcommands.add_parser("codex-hooks")
+    codex_hooks.add_argument("hooks_file", type=Path)
+    codex_hooks.add_argument("command")
+
     claude = subcommands.add_parser("claude")
     claude.add_argument("settings_file", type=Path)
     claude.add_argument("command")
@@ -222,6 +279,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command_name == "codex":
         configure_codex_notify(args.config_file, args.command)
+    elif args.command_name == "codex-hooks":
+        configure_codex_hooks(args.hooks_file, args.command)
     elif args.command_name == "claude":
         configure_claude_hooks(args.settings_file, args.command)
     return 0
