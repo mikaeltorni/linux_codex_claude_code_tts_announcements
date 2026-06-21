@@ -274,8 +274,6 @@ def clarify(context: RuntimeContext, question: str) -> bool:
             "clarify",
             "--question",
             question,
-            "--label",
-            context.label,
             "--project-name",
             context.project_name,
             "--project-path",
