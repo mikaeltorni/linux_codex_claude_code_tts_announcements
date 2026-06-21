@@ -14,6 +14,6 @@ ISC_REPO_LABEL="Codex/Claude Code TTS announcements"
 ISC_COMPONENTS=(
   "engine|Agent TTS (agent-tts) speech engine|on|install_agent_tts_engine"
   "hook_files|TTS notify hook files|on|install_tts_hook_files"
-  "codex_hook|Codex notify hook configuration|on|configure_codex_notify_hook"
+  "codex_hook|Codex notify and attention hook configuration|on|configure_codex_notify_hook"
   "claude_hooks|Claude Code notify hooks configuration|on|configure_claude_notify_hooks"
 )

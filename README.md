@@ -42,6 +42,7 @@ When installed, this repo:
 - installs the `agent-tts` speech engine and links `~/.local/bin/agent-tts`
 - copies hook code to `$HOME/.local/share/codex-claude-tts-announcements/`
 - writes a generated Codex `notify = [...]` block in `$HOME/.codex/config.toml`
+- adds a Codex `PermissionRequest` attention hook to `$HOME/.codex/hooks.json`
 - adds generated Claude Code hook commands to `$HOME/.claude/settings.json`
 - removes the retired Agent Command Center `notify_agent.py` hook entries
 
