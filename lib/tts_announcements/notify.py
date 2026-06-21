@@ -438,8 +438,9 @@ def handle_claude(payload: dict[str, Any]) -> int:
         announce("finish", context, task_description=task)
     elif event == "UserPromptSubmit":
         update_title(str(payload.get("prompt", "")), context)
-    elif event == "Notification":
-        message = normalize_text(str(payload.get("message", ""))) or "Claude needs your attention"
+    elif event in {"Notification", "PermissionRequest"}:
+        default_message = f"{context.label.capitalize()} needs your attention"
+        message = normalize_text(str(payload.get("message", ""))) or default_message
         clarify(context, message)
     return 0
 
