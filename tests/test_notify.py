@@ -94,6 +94,35 @@ def test_clarify_uses_only_supported_tracker_arguments(monkeypatch):
     assert "--label" not in calls[0]
 
 
+def test_idle_waiting_notification_does_not_clarify(monkeypatch):
+    """The idle "waiting for your input" timeout must not re-speak at turn end."""
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+    payload = {
+        "hook_event_name": "Notification",
+        "message": "Claude is waiting for your input",
+        "cwd": "/repo/demo",
+    }
+
+    assert notify.handle_claude(payload) == 0
+    assert calls == []
+
+
+def test_permission_notification_still_clarifies(monkeypatch):
+    """A genuine permission Notification must still raise the attention prompt."""
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+    payload = {
+        "hook_event_name": "Notification",
+        "message": "Claude needs your permission to use Bash",
+        "cwd": "/repo/demo",
+    }
+
+    assert notify.handle_claude(payload) == 0
+    assert calls[0][0] == "clarify"
+    assert calls[0][calls[0].index("--question") + 1] == "Claude needs your permission to use Bash"
+
+
 def test_codex_permission_request_routes_attention_announcement(monkeypatch):
     calls = []
     monkeypatch.setenv("CODEX_AGENT_LABEL", "codex")

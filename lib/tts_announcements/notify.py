@@ -35,6 +35,14 @@ LOG_COMPONENT = "notify"
 #: Default voice used for clarification/attention prompts when none is configured.
 DEFAULT_CLARIFY_VOICE = "af_jessica"
 
+#: Substring marking Claude Code's idle "waiting for input" Notification. Claude
+#: emits this ~60s after a turn ends when the user has not replied, and re-emits
+#: it while the session stays idle. It is not a genuine clarification request, so
+#: speaking the attention prompt for it just re-fires "what should we do" at the
+#: end of a finished turn (redundant with the finish chime). Matched
+#: case-insensitively against the normalized message text.
+IDLE_NOTIFICATION_MARKER = "waiting for your input"
+
 
 @dataclass(frozen=True)
 class RuntimeContext:
@@ -467,9 +475,19 @@ def handle_claude(payload: dict[str, Any]) -> int:
     elif event == "UserPromptSubmit":
         update_title(str(payload.get("prompt", "")), context)
     elif event in {"Notification", "PermissionRequest"}:
+        raw_message = normalize_text(str(payload.get("message", "")))
+        # Claude fires a Notification both for genuine attention (permission
+        # requests) and for the idle "waiting for your input" timeout that recurs
+        # after a turn has already finished. Suppress the idle variant so the
+        # attention prompt only speaks when there is actually something to ask.
+        if event == "Notification" and IDLE_NOTIFICATION_MARKER in raw_message.casefold():
+            log.debug(
+                f"skip clarify for idle notification: {raw_message!r}",
+                component=LOG_COMPONENT,
+            )
+            return 0
         default_message = f"{context.label.capitalize()} needs your attention"
-        message = normalize_text(str(payload.get("message", ""))) or default_message
-        clarify(context, message)
+        clarify(context, raw_message or default_message)
     return 0
 
 
