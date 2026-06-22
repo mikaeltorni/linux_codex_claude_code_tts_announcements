@@ -189,15 +189,42 @@ def project_name_from(payload: dict[str, Any]) -> str:
     return ""
 
 
+def runtime_kind(default_label: str, label: str) -> str:
+    """Resolve the agent kind for payload formats shared by multiple runtimes."""
+    explicit = normalize_text(os.environ.get("CODEX_AGENT_KIND", "")).casefold()
+    if explicit in {"api", "claude", "codex", "qwen"}:
+        return explicit
+    normalized_label = normalize_text(label).casefold()
+    if normalized_label.startswith(("local", "qwen")):
+        return "qwen"
+    for kind in ("claude", "codex", "api"):
+        if normalized_label.startswith(kind):
+            return kind
+    return default_label if default_label in {"claude", "codex"} else "codex"
+
+
+def voice_for_kind(kind: str) -> str:
+    """Resolve generic, normalized-wrapper, and runtime-specific voice vars."""
+    generic = os.environ.get("ATTS_VOICE") or os.environ.get("CODEX__TTS_VOICE")
+    if generic:
+        return generic
+    names = {
+        "claude": ("ATTS_CLAUDE_VOICE", "CLAUDE_TTS_VOICE", "CLAUDE_CODE_TTS_VOICE"),
+        "codex": ("ATTS_CODEX_VOICE", "CODEX_TTS_VOICE"),
+        "qwen": ("ATTS_QWEN_VOICE", "QWEN_CODEX_TTS_VOICE"),
+    }.get(kind, ())
+    return next((value for name in names if (value := os.environ.get(name))), "")
+
+
 def context_for(payload: dict[str, Any], default_label: str) -> RuntimeContext:
     """Build runtime context from payload and environment.
 
     Args:
         payload: Decoded hook payload; its ``cwd`` field contributes to the
             resolved project path and name.
-        default_label: Label to use when ``CODEX_AGENT_LABEL`` is unset; also
-            selects the default home directory (``.claude`` for ``"claude"``,
-            otherwise ``.codex``).
+        default_label: Label to use when ``CODEX_AGENT_LABEL`` is unset. The
+            effective label or explicit ``CODEX_AGENT_KIND`` selects runtime
+            voice variables and the default config home.
 
     Returns:
         RuntimeContext: Fully resolved, immutable context for the event.
@@ -205,15 +232,18 @@ def context_for(payload: dict[str, Any], default_label: str) -> RuntimeContext:
     project_path = os.environ.get("CODEX_AGENT_PROJECT_PATH", "")
     cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else ""
     label = normalize_text(os.environ.get("CODEX_AGENT_LABEL", "")) or default_label
-    voice = (
-        os.environ.get("CODEX__TTS_VOICE")
-        or os.environ.get("CLAUDE_TTS_VOICE")
-        or os.environ.get("CLAUDE_CODE_TTS_VOICE")
-        or ""
-    )
-    default_home = Path.home() / (".claude" if default_label == "claude" else ".codex")
+    kind = runtime_kind(default_label, label)
+    voice = voice_for_kind(kind)
+    default_home = Path.home() / {
+        "claude": ".claude",
+        "qwen": ".codex-qwen",
+        "api": ".codex-api",
+    }.get(kind, ".codex")
     codex_home = Path(os.environ.get("CODEX_HOME") or default_home)
-    model_name = normalize_text(os.environ.get("CODEX_AGENT_LMSTUDIO_MODEL", ""))
+    model_name = normalize_text(
+        os.environ.get("CODEX_AGENT_LMSTUDIO_MODEL", "")
+        or (os.environ.get("QWEN_CODEX_LMSTUDIO_MODEL", "") if kind == "qwen" else "")
+    )
     return RuntimeContext(
         label=label,
         project_name=project_name_from(payload),

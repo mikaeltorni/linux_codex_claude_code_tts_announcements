@@ -55,7 +55,7 @@ configure_codex_notify_hook() {
   config_file="${CODEX_CONFIG_FILE:-$home/.codex/config.toml}"
   hooks_file="${CODEX_HOOKS_FILE:-$home/.codex/hooks.json}"
   command="$(tts_hook_command)"
-  attention_command="env CODEX_AGENT_LABEL=codex $command"
+  attention_command="env CODEX_AGENT_KIND=codex CODEX_AGENT_LABEL=codex $command"
   mkdir -p "$(dirname "$config_file")"
   PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks codex "$config_file" "$command"
   PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks codex-hooks "$hooks_file" "$attention_command"

@@ -76,6 +76,7 @@ def test_installer_writes_config_hooks_without_replacing_binaries(tmp_path):
     permission_hooks = installed_codex_hooks["hooks"]["PermissionRequest"]
     permission_commands = [hook["command"] for entry in permission_hooks for hook in entry["hooks"]]
     assert any("CODEX_AGENT_LABEL=codex" in command for command in permission_commands)
+    assert any("CODEX_AGENT_KIND=codex" in command for command in permission_commands)
     assert any("notify_agent.py" in command for command in permission_commands)
 
     settings = json.loads(claude_settings.read_text(encoding="utf-8"))

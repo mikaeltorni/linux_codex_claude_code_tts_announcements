@@ -21,14 +21,18 @@ _ATTS_ENV = (
     "ATTS_VOLUME_PERCENT",
     "ATTS_SILENT",
     "ATTS_VOICE",
+    "ATTS_CODEX_VOICE",
     "ATTS_CLAUDE_VOICE",
+    "ATTS_QWEN_VOICE",
     "ATTS_ANNOUNCE_WORKSPACE",
     "ATTS_NO_AUDIO",
     "AGENT_COMMAND_CENTER_TTS_SPEED",
     "AGENT_COMMAND_CENTER_TTS_VOLUME_PERCENT",
     "ACC_SILENT",
     "CODEX__TTS_VOICE",
+    "CODEX_TTS_VOICE",
     "CLAUDE_TTS_VOICE",
+    "QWEN_CODEX_TTS_VOICE",
 )
 
 
@@ -119,6 +123,15 @@ def test_voice_for_kind_claude_legacy_env(engine, monkeypatch):
     """The legacy CLAUDE_TTS_VOICE still selects the Claude voice."""
     monkeypatch.setenv("CLAUDE_TTS_VOICE", "af_river")
     assert engine.voice_for_kind("claude", {}) == "af_river"
+
+
+def test_voice_for_kind_supports_runtime_specific_variables(engine):
+    """Codex, Claude, and Qwen each honor their ATTS and legacy voice names."""
+    assert engine.voice_for_kind("codex", {"ATTS_CODEX_VOICE": "af_codex"}) == "af_codex"
+    assert engine.voice_for_kind("claude", {"ATTS_CLAUDE_VOICE": "af_claude"}) == "af_claude"
+    assert engine.voice_for_kind("qwen", {"ATTS_QWEN_VOICE": "af_qwen"}) == "af_qwen"
+    assert engine.voice_for_kind("codex", {"CODEX_TTS_VOICE": "af_legacy_codex"}) == "af_legacy_codex"
+    assert engine.voice_for_kind("qwen", {"QWEN_CODEX_TTS_VOICE": "af_legacy_qwen"}) == "af_legacy_qwen"
 
 
 def test_workspace_suffix_disabled(engine):

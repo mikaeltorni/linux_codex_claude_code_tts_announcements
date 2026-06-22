@@ -108,3 +108,61 @@ def test_codex_permission_request_routes_attention_announcement(monkeypatch):
     assert notify.handle_claude(payload) == 0
     assert calls[0][0] == "clarify"
     assert calls[0][calls[0].index("--question") + 1] == "Codex needs your attention"
+
+
+def test_context_uses_codex_variables_for_codex_attention_hook(monkeypatch):
+    """Claude-shaped Codex attention events must not inherit Claude defaults."""
+    monkeypatch.setenv("CODEX_AGENT_LABEL", "codex")
+    monkeypatch.setenv("CODEX_TTS_VOICE", "af_codex")
+    monkeypatch.delenv("CODEX_AGENT_KIND", raising=False)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.delenv("CODEX__TTS_VOICE", raising=False)
+    monkeypatch.delenv("CLAUDE_TTS_VOICE", raising=False)
+
+    context = notify.context_for({"cwd": "/repo/demo"}, "claude")
+
+    assert context.label == "codex"
+    assert context.voice == "af_codex"
+    assert context.codex_home == Path.home() / ".codex"
+
+
+def test_context_uses_claude_variables_for_direct_claude_hook(monkeypatch):
+    """Direct Claude hooks should use Claude's voice and config home."""
+    monkeypatch.setenv("CLAUDE_TTS_VOICE", "af_claude")
+    monkeypatch.delenv("CODEX_AGENT_KIND", raising=False)
+    monkeypatch.delenv("CODEX_AGENT_LABEL", raising=False)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.delenv("CODEX__TTS_VOICE", raising=False)
+
+    context = notify.context_for({"cwd": "/repo/demo"}, "claude")
+
+    assert context.label == "claude"
+    assert context.voice == "af_claude"
+    assert context.codex_home == Path.home() / ".claude"
+
+
+def test_context_uses_qwen_variables_for_direct_qwen_hook(monkeypatch):
+    """Qwen's Local label should select its own voice, model, and config home."""
+    monkeypatch.setenv("CODEX_AGENT_LABEL", "Local")
+    monkeypatch.setenv("QWEN_CODEX_TTS_VOICE", "af_qwen")
+    monkeypatch.setenv("QWEN_CODEX_LMSTUDIO_MODEL", "qwen-model")
+    monkeypatch.delenv("CODEX_AGENT_KIND", raising=False)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.delenv("CODEX__TTS_VOICE", raising=False)
+    monkeypatch.delenv("CODEX_AGENT_LMSTUDIO_MODEL", raising=False)
+
+    context = notify.context_for({"cwd": "/repo/demo"}, "codex")
+
+    assert context.label == "Local"
+    assert context.voice == "af_qwen"
+    assert context.codex_home == Path.home() / ".codex-qwen"
+    assert context.model_name == "qwen-model"
+
+
+def test_context_normalized_wrapper_voice_wins(monkeypatch):
+    """ACC's normalized wrapper voice remains the highest-priority override."""
+    monkeypatch.setenv("CODEX_AGENT_KIND", "qwen")
+    monkeypatch.setenv("CODEX__TTS_VOICE", "af_wrapper")
+    monkeypatch.setenv("QWEN_CODEX_TTS_VOICE", "af_qwen")
+
+    assert notify.context_for({}, "codex").voice == "af_wrapper"
