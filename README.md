@@ -1,6 +1,6 @@
 # Linux Codex/Claude Code TTS Announcements
 
-The agent text-to-speech home for Codex and Claude Code on Linux. This
+The agent text-to-speech home for Codex, Claude Code, and Qwen on Linux. This
 repository ships two things:
 
 1. **`agent-tts`** — the standalone speech engine that owns *all* agent TTS:
@@ -62,7 +62,12 @@ Tunables (env overrides win over the persisted values):
 - `ATTS_SPEED` — speech speed multiplier (default `1.5`).
 - `ATTS_VOLUME_PERCENT` — linear volume percentage (default `1000`).
 - `ATTS_SILENT` — set truthy to mute one invocation.
-- `ATTS_VOICE` / `ATTS_CLAUDE_VOICE` — voice overrides.
+- `ATTS_VOICE` — global voice override.
+- `ATTS_CODEX_VOICE`, `ATTS_CLAUDE_VOICE`, and `ATTS_QWEN_VOICE` —
+  per-runtime overrides when `ATTS_VOICE` is unset. Legacy
+  `CODEX_TTS_VOICE`, `CLAUDE_TTS_VOICE`, and `QWEN_CODEX_TTS_VOICE` remain
+  supported. ACC wrappers' normalized `CODEX__TTS_VOICE` also remains
+  supported and takes precedence over per-runtime legacy names.
 - `ATTS_ANNOUNCE_WORKSPACE=0` — disable the spoken workspace suffix.
 - `ATTS_NO_AUDIO` — generate/cache clips but never play (used by tests).
 - `ATTS_STATE_DIR` — override the engine state/cache directory.
