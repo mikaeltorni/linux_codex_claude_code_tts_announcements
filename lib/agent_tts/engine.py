@@ -86,7 +86,10 @@ def _read_state_file(filename: str) -> str:
     for base in (STATE_DIR, LEGACY_STATE_DIR):
         try:
             text = (base / filename).read_text(encoding="utf-8").strip()
-        except Exception:
+        except FileNotFoundError:
+            text = ""
+        except OSError as exc:
+            append_voice_log(f"state read failed {base / filename}: {exc}")
             text = ""
         if text:
             return text
@@ -293,9 +296,14 @@ def _capture_command(cmd: list[str], timeout: float = 1.0) -> str:
             timeout=timeout,
             check=False,
         )
-    except Exception:
+    except subprocess.TimeoutExpired:
+        append_voice_log(f"command timed out: {' '.join(cmd)}")
+        return ""
+    except OSError as exc:
+        append_voice_log(f"command failed to launch {' '.join(cmd)}: {exc}")
         return ""
     if result.returncode != 0:
+        append_voice_log(f"command failed rc={result.returncode}: {' '.join(cmd)}")
         return ""
     return (result.stdout or "").strip()
 
@@ -330,8 +338,8 @@ def detect_terminal_workspace(window_id: str = "") -> str:
                     name = str(workspace.get("name") or workspace.get("num") or "").strip()
                     if name:
                         return name
-        except Exception:
-            pass
+        except (TypeError, ValueError) as exc:
+            append_voice_log(f"sway workspace parse failed: {exc}")
     hypr = _capture_command(["hyprctl", "activeworkspace", "-j"])
     if hypr:
         try:
@@ -339,8 +347,8 @@ def detect_terminal_workspace(window_id: str = "") -> str:
             name = str(data.get("name") or data.get("id") or "").strip()
             if name:
                 return name
-        except Exception:
-            pass
+        except (AttributeError, TypeError, ValueError) as exc:
+            append_voice_log(f"hypr workspace parse failed: {exc}")
 
     wid = (window_id or os.environ.get("WINDOWID", "")).strip()
     if wid:
@@ -579,9 +587,10 @@ def fallback_speak(text: str, ignore_silent: bool = False) -> None:
         if shutil.which(cmd[0]):
             try:
                 subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
+            except OSError as exc:
+                append_voice_log(f"{cmd[0]} fallback launch failed: {exc}")
             return
+    append_voice_log("fallback_speak skipped: no fallback synthesizer found")
 
 
 def speak_with_kokoro(
