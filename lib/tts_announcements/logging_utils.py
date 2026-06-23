@@ -1,16 +1,18 @@
 """Centralized logging utility for the TTS announcement hooks.
 
-This module is the single source of truth for diagnostic logging across the
-notify hook (:mod:`tts_announcements.notify`) and the install-time config
-writers (:mod:`tts_announcements.install_hooks`). It provides leveled,
-timestamped, context-tagged log lines written to a single rotating-free log
-file, and it deliberately never raises: logging must not break a hook that an
-AI agent runtime is waiting on.
+This module is the single source of truth for diagnostic logging across the TTS
+engine, notify hook (:mod:`tts_announcements.notify`), and install-time config
+writers (:mod:`tts_announcements.install_hooks`). It provides standard
+``logging`` loggers, call tracing, and compatibility leveled helpers, and it
+deliberately never raises: logging must not break a hook that an AI agent
+runtime is waiting on.
 
 Components:
   - LogLevel: Ordered severity levels (VERBOSE, DEBUG, INFO, WARN, ERROR).
   - log_dir: Resolve the directory that receives generated log files.
-  - log: Write one leveled, timestamped line for a component.
+  - get_logger: Return an idempotent standard logger for one log file.
+  - log_call: Trace function arguments and return values.
+  - log: Write one leveled, timestamped line for compatibility call sites.
   - verbose / debug / info / warn / error: Convenience wrappers around ``log``.
 
 Usage:
@@ -19,21 +21,25 @@ Usage:
     >>> log.error("tracker missing", component="install")
 
 Log destination:
-    Logs are written to ``<log_dir>/notify.log``. ``log_dir`` honors the
-    ``AGENT_COMMAND_CENTER_LOG_DIR`` environment variable (the canonical project
-    override) and otherwise defaults to the Agent Command Center ``.log``
-    directory so every repo in that ecosystem shares one searchable log file.
+    Logs are written under ``<log_dir>``. ``log_dir`` honors ``ATTS_LOG_DIR`` and
+    ``AGENT_COMMAND_CENTER_LOG_DIR`` for installed integrations, and otherwise
+    defaults to this repository's ``.log`` directory.
 """
 
 from __future__ import annotations
 
+import functools
+import inspect
+import logging
 import os
-from datetime import datetime
 from enum import IntEnum
 from pathlib import Path
+from typing import Any, Callable, TypeVar
 
 #: Name of the single log file all components append to, under :func:`log_dir`.
 LOG_FILE_NAME = "notify.log"
+LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 class LogLevel(IntEnum):
@@ -51,6 +57,15 @@ class LogLevel(IntEnum):
     ERROR = 50
 
 
+PYTHON_LEVELS = {
+    LogLevel.VERBOSE: logging.DEBUG,
+    LogLevel.DEBUG: logging.DEBUG,
+    LogLevel.INFO: logging.INFO,
+    LogLevel.WARN: logging.WARNING,
+    LogLevel.ERROR: logging.ERROR,
+}
+
+
 def log_dir(home: Path | None = None) -> Path:
     """Resolve the directory that receives generated log files.
 
@@ -60,14 +75,90 @@ def log_dir(home: Path | None = None) -> Path:
             used. Primarily an injection point for tests.
 
     Returns:
-        Path: The log directory. If ``AGENT_COMMAND_CENTER_LOG_DIR`` is set in
-        the environment, its expanded value is returned; otherwise the Agent
-        Command Center ``.log`` directory under ``home`` is returned.
+        Path: The log directory. If ``ATTS_LOG_DIR`` or
+        ``AGENT_COMMAND_CENTER_LOG_DIR`` is set in the environment, its expanded
+        value is returned. Otherwise ``home/.log`` is returned when ``home`` is
+        provided, or the repository ``.log`` directory is returned.
     """
-    configured = os.environ.get("AGENT_COMMAND_CENTER_LOG_DIR", "")
+    configured = os.environ.get("ATTS_LOG_DIR", "") or os.environ.get("AGENT_COMMAND_CENTER_LOG_DIR", "")
     if configured:
         return Path(configured).expanduser()
-    return (home or Path.home()) / "projects" / "agent_command_center" / ".log"
+    if home is not None:
+        return home / ".log"
+    return Path(__file__).resolve().parents[2] / ".log"
+
+
+def get_logger(name: str, log_file: str, *, home: Path | None = None) -> logging.Logger:
+    """Return an idempotent project logger writing inside :func:`log_dir`.
+
+    Args:
+        name: Logger name included in each record.
+        log_file: File name created inside the resolved log directory.
+        home: Optional home override forwarded to :func:`log_dir`.
+
+    Returns:
+        logging.Logger: A configured logger. If the sink cannot be opened, the
+        logger receives a ``NullHandler`` so logging never aborts callers.
+    """
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    target = log_dir(home) / log_file
+    if logger.handlers and all(
+        getattr(handler, "_tts_log_path", target) == target for handler in logger.handlers
+    ):
+        return logger
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
+    try:
+        directory = target.parent
+        directory.mkdir(parents=True, exist_ok=True)
+        handler: logging.Handler = logging.FileHandler(
+            target,
+            encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    except OSError:
+        handler = logging.NullHandler()
+    setattr(handler, "_tts_log_path", target)
+    logger.addHandler(handler)
+    return logger
+
+
+def log_call(logger: logging.Logger, level: int = logging.DEBUG) -> Callable[[F], F]:
+    """Trace a function by logging all arguments on entry and return on exit.
+
+    Each record carries the wrapped function's ``file:qualname``. The decorator
+    intentionally logs only entry arguments and the returned value.
+
+    Args:
+        logger: Centralized project logger returned by :func:`get_logger`.
+        level: Logging level used for both trace records.
+
+    Returns:
+        Callable[[F], F]: Decorator for the target callable.
+    """
+
+    def decorator(func: F) -> F:
+        location = f"{Path(func.__code__.co_filename).name}:{func.__qualname__}"
+        signature = inspect.signature(func)
+
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            bound = signature.bind(*args, **kwargs)
+            bound.apply_defaults()
+            rendered = ", ".join(
+                f"{name}={value!r}" for name, value in bound.arguments.items()
+            )
+            logger.log(level, "ENTER %s(%s)", location, rendered)
+            result = func(*args, **kwargs)
+            logger.log(level, "EXIT %s -> %r", location, result)
+            return result
+
+        return wrapper  # type: ignore[return-value]
+
+    return decorator
 
 
 def log(
@@ -96,15 +187,8 @@ def log(
     Returns:
         None.
     """
-    try:
-        path = log_dir(home) / LOG_FILE_NAME
-        path.parent.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().isoformat(timespec="seconds")
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(f"{timestamp} [{level.name}] [{component}] {message}\n")
-    except Exception:
-        # Logging must never break a hook the agent runtime is blocking on.
-        pass
+    logger = get_logger("tts_announcements", LOG_FILE_NAME, home=home)
+    logger.log(PYTHON_LEVELS[level], "[%s] %s", component, message)
 
 
 def verbose(message: str, *, component: str = "notify", home: Path | None = None) -> None:

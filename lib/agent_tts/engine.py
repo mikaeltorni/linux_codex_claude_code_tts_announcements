@@ -35,8 +35,9 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
+
+from tts_announcements import logging_utils
 
 # ── State and configuration locations ────────────────────────────────────────
 STATE_DIR = Path(
@@ -52,16 +53,13 @@ STATE_DIR = Path(
 # an existing saved speed/volume/silent value keeps applying until overwritten.
 LEGACY_STATE_DIR = Path(Path.home() / ".local/state/codex-agent-tracker")
 LOG_DIR = Path(
-    os.environ.get(
-        "ATTS_LOG_DIR",
-        os.environ.get("AGENT_COMMAND_CENTER_LOG_DIR", STATE_DIR / "log"),
-    )
+    logging_utils.log_dir()
 )
 
 SILENT_FLAG_FILE = STATE_DIR / "silent"
 TTS_SPEED_FILE = STATE_DIR / "tts-speed"
 TTS_VOLUME_FILE = STATE_DIR / "tts-volume"
-VOICE_LOG_FILE = LOG_DIR / "voice.log"
+LOGGER = logging_utils.get_logger("agent_tts", "voice.log")
 
 TRUTHY = {"1", "true", "yes", "y", "on", "shutdown", "poweroff"}
 DEFAULT_TTS_SPEED = 1.5
@@ -89,7 +87,7 @@ def _read_state_file(filename: str) -> str:
         except FileNotFoundError:
             text = ""
         except OSError as exc:
-            append_voice_log(f"state read failed {base / filename}: {exc}")
+            LOGGER.error("state read failed %s: %s", base / filename, exc)
             text = ""
         if text:
             return text
@@ -102,22 +100,6 @@ def project_folder_name(project_path: str = "") -> str:
     if not path:
         return ""
     return os.path.basename(os.path.normpath(path))
-
-
-# ── Verbatim engine helpers (moved from codex-agent-tracker) ──────────────────
-def now() -> str:
-    """Return the current local timestamp."""
-    return datetime.now(timezone.utc).isoformat()
-
-
-def append_voice_log(message: str) -> None:
-    """Append a timestamped voice event."""
-    try:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        with VOICE_LOG_FILE.open("a", encoding="utf-8") as f:
-            f.write(f"{now()} {message}\n")
-    except Exception:
-        pass
 
 
 def parse_tts_speed(value: str) -> float:
@@ -262,12 +244,12 @@ def amplify_audio(input_path: Path, output_path: Path, gain_db: float) -> bool:
             text=True,
         )
     except Exception as exc:
-        append_voice_log(f"ffmpeg amplify exception: {exc}")
+        LOGGER.info(f"ffmpeg amplify exception: {exc}")
         return False
     if result.returncode == 0:
-        append_voice_log(f"amplified {input_path} to {output_path} filter={audio_filter}")
+        LOGGER.info(f"amplified {input_path} to {output_path} filter={audio_filter}")
         return True
-    append_voice_log(f"ffmpeg amplify failed rc={result.returncode}: {(result.stderr or '').strip()}")
+    LOGGER.info(f"ffmpeg amplify failed rc={result.returncode}: {(result.stderr or '').strip()}")
     return False
 
 
@@ -297,13 +279,13 @@ def _capture_command(cmd: list[str], timeout: float = 1.0) -> str:
             check=False,
         )
     except subprocess.TimeoutExpired:
-        append_voice_log(f"command timed out: {' '.join(cmd)}")
+        LOGGER.info(f"command timed out: {' '.join(cmd)}")
         return ""
     except OSError as exc:
-        append_voice_log(f"command failed to launch {' '.join(cmd)}: {exc}")
+        LOGGER.info(f"command failed to launch {' '.join(cmd)}: {exc}")
         return ""
     if result.returncode != 0:
-        append_voice_log(f"command failed rc={result.returncode}: {' '.join(cmd)}")
+        LOGGER.info(f"command failed rc={result.returncode}: {' '.join(cmd)}")
         return ""
     return (result.stdout or "").strip()
 
@@ -339,7 +321,7 @@ def detect_terminal_workspace(window_id: str = "") -> str:
                     if name:
                         return name
         except (TypeError, ValueError) as exc:
-            append_voice_log(f"sway workspace parse failed: {exc}")
+            LOGGER.info(f"sway workspace parse failed: {exc}")
     hypr = _capture_command(["hyprctl", "activeworkspace", "-j"])
     if hypr:
         try:
@@ -348,7 +330,7 @@ def detect_terminal_workspace(window_id: str = "") -> str:
             if name:
                 return name
         except (AttributeError, TypeError, ValueError) as exc:
-            append_voice_log(f"hypr workspace parse failed: {exc}")
+            LOGGER.info(f"hypr workspace parse failed: {exc}")
 
     wid = (window_id or os.environ.get("WINDOWID", "")).strip()
     if wid:
@@ -423,13 +405,13 @@ def current_tts_speed() -> float:
         try:
             return parse_tts_speed(env.strip())
         except ValueError:
-            append_voice_log(f"invalid ATTS_SPEED={env!r}; ignoring")
+            LOGGER.info(f"invalid ATTS_SPEED={env!r}; ignoring")
     text = _read_state_file("tts-speed")
     if text:
         try:
             return parse_tts_speed(text)
         except ValueError:
-            append_voice_log(f"invalid persisted TTS speed={text!r}; using default")
+            LOGGER.info(f"invalid persisted TTS speed={text!r}; using default")
     return DEFAULT_TTS_SPEED
 
 
@@ -441,7 +423,7 @@ def persisted_tts_volume_percent() -> float | None:
     try:
         return parse_tts_volume_percent(text)
     except ValueError:
-        append_voice_log(f"invalid persisted TTS volume={text!r}; using default")
+        LOGGER.info(f"invalid persisted TTS volume={text!r}; using default")
         return None
 
 
@@ -463,7 +445,7 @@ def current_tts_volume_percent() -> float:
             try:
                 return parse_tts_volume_percent(env_text)
             except ValueError:
-                append_voice_log(f"invalid ATTS_VOLUME_PERCENT={env!r}; ignoring")
+                LOGGER.info(f"invalid ATTS_VOLUME_PERCENT={env!r}; ignoring")
     persisted = persisted_tts_volume_percent()
     if persisted is not None:
         return persisted
@@ -545,10 +527,10 @@ def play_audio(audio_path: Path, ignore_silent: bool = False) -> bool:
     ``True`` so callers do not fall back to a desktop synthesizer.
     """
     if _no_audio():
-        append_voice_log(f"playback suppressed (ATTS_NO_AUDIO) for {audio_path}")
+        LOGGER.info(f"playback suppressed (ATTS_NO_AUDIO) for {audio_path}")
         return True
     if not ignore_silent and acc_silent_enabled():
-        append_voice_log(f"playback suppressed (silent) for {audio_path}")
+        LOGGER.info(f"playback suppressed (silent) for {audio_path}")
         return True
     for player in ("pw-play", "paplay", "aplay"):
         player_path = shutil.which(player)
@@ -563,12 +545,12 @@ def play_audio(audio_path: Path, ignore_silent: bool = False) -> bool:
                 text=True,
             )
         except Exception as exc:
-            append_voice_log(f"{player} exception: {exc}")
+            LOGGER.info(f"{player} exception: {exc}")
             continue
         if result.returncode == 0:
-            append_voice_log(f"played {audio_path} with {player}")
+            LOGGER.info(f"played {audio_path} with {player}")
             return True
-        append_voice_log(f"{player} failed rc={result.returncode}: {(result.stderr or '').strip()}")
+        LOGGER.info(f"{player} failed rc={result.returncode}: {(result.stderr or '').strip()}")
     return False
 
 
@@ -578,19 +560,19 @@ def fallback_speak(text: str, ignore_silent: bool = False) -> None:
     Honors ``ATTS_NO_AUDIO`` and silent mode (unless ``ignore_silent``).
     """
     if _no_audio():
-        append_voice_log(f"fallback_speak suppressed (ATTS_NO_AUDIO) text={text!r}")
+        LOGGER.info(f"fallback_speak suppressed (ATTS_NO_AUDIO) text={text!r}")
         return
     if not ignore_silent and acc_silent_enabled():
-        append_voice_log(f"fallback_speak suppressed (silent) text={text!r}")
+        LOGGER.info(f"fallback_speak suppressed (silent) text={text!r}")
         return
     for cmd in (("spd-say", text), ("espeak-ng", text)):
         if shutil.which(cmd[0]):
             try:
                 subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except OSError as exc:
-                append_voice_log(f"{cmd[0]} fallback launch failed: {exc}")
+                LOGGER.info(f"{cmd[0]} fallback launch failed: {exc}")
             return
-    append_voice_log("fallback_speak skipped: no fallback synthesizer found")
+    LOGGER.info("fallback_speak skipped: no fallback synthesizer found")
 
 
 def speak_with_kokoro(
@@ -608,12 +590,12 @@ def speak_with_kokoro(
     """
     uvx = resolve_uvx()
     if not text or not voice or not uvx:
-        append_voice_log(f"kokoro skipped text={bool(text)} voice={voice!r} uvx={bool(uvx)}")
+        LOGGER.info(f"kokoro skipped text={bool(text)} voice={voice!r} uvx={bool(uvx)}")
         return False
 
     tts_dir = codex_home / "tts"
     if not (tts_dir / "kokoro-v1.0.onnx").is_file() or not (tts_dir / "voices-v1.0.bin").is_file():
-        append_voice_log(f"kokoro missing files in {tts_dir}")
+        LOGGER.info(f"kokoro missing files in {tts_dir}")
         return False
 
     speed = current_tts_speed()
@@ -634,7 +616,7 @@ def speak_with_kokoro(
     input_path = Path("/tmp") / f"agent_tts_{safe_name}.txt"
 
     if audio_path.is_file():
-        append_voice_log(f"using cached {audio_path} voice={voice} text={text!r}")
+        LOGGER.info(f"using cached {audio_path} voice={voice} text={text!r}")
         if not play:
             return True
         return play_audio(audio_path, ignore_silent=ignore_silent)
@@ -667,22 +649,22 @@ def speak_with_kokoro(
             text=True,
         )
     except subprocess.CalledProcessError as exc:
-        append_voice_log(f"kokoro failed rc={exc.returncode}: {(exc.stderr or '').strip()}")
+        LOGGER.info(f"kokoro failed rc={exc.returncode}: {(exc.stderr or '').strip()}")
         return False
     except Exception as exc:
-        append_voice_log(f"kokoro exception: {exc}")
+        LOGGER.info(f"kokoro exception: {exc}")
         return False
 
     if abs(gain_db) >= 0.0005:
         if not amplify_audio(raw_audio_path, audio_path, gain_db):
             try:
                 raw_audio_path.replace(audio_path)
-                append_voice_log(f"using unamplified fallback {audio_path}")
+                LOGGER.info(f"using unamplified fallback {audio_path}")
             except Exception as exc:
-                append_voice_log(f"audio fallback failed: {exc}")
+                LOGGER.info(f"audio fallback failed: {exc}")
                 return False
 
-    append_voice_log(f"generated {audio_path} voice={voice} speed={speed_text} volume={volume_text} text={text!r}")
+    LOGGER.info(f"generated {audio_path} voice={voice} speed={speed_text} volume={volume_text} text={text!r}")
     if not play:
         return True
     return play_audio(audio_path, ignore_silent=ignore_silent)

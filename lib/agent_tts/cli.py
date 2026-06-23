@@ -87,7 +87,7 @@ def cmd_speed(args) -> int:
         return 2
     engine.set_tts_speed(speed)
     speed_text = engine.format_tts_speed(speed)
-    engine.append_voice_log(f"tts speed set to {speed_text}")
+    engine.LOGGER.info(f"tts speed set to {speed_text}")
     print(speed_text)
     return 0
 
@@ -106,7 +106,7 @@ def cmd_volume(args) -> int:
     engine.set_tts_volume_percent(percent)
     percent_text = engine.format_tts_volume_percent(percent)
     gain_text = engine.format_gain_db(engine.tts_volume_percent_to_db(percent))
-    engine.append_voice_log(f"tts volume set to {percent_text} ({gain_text}dB)")
+    engine.LOGGER.info(f"tts volume set to {percent_text} ({gain_text}dB)")
     print(percent_text)
     return 0
 
@@ -134,7 +134,7 @@ def cmd_silent(args) -> int:
         return 2
 
     engine.set_acc_silent(target)
-    engine.append_voice_log(f"silent toggled -> {'on' if target else 'off'}")
+    engine.LOGGER.info(f"silent toggled -> {'on' if target else 'off'}")
     print("on" if target else "off")
 
     text = engine.SILENT_ENABLED_TEXT if target else engine.SILENT_DISABLED_TEXT

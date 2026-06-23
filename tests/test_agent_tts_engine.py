@@ -157,41 +157,36 @@ def test_play_audio_suppressed_returns_true(engine):
 
 def test_state_file_read_errors_are_logged(engine, monkeypatch):
     """Unreadable persisted state falls back cleanly with a diagnostic log."""
-    messages = []
-
     def fail_read_text(self, encoding=None):
         raise OSError("boom")
 
     monkeypatch.setattr(Path, "read_text", fail_read_text)
-    monkeypatch.setattr(engine, "append_voice_log", messages.append)
 
     assert engine._read_state_file("tts-speed") == ""
-    assert any("state read failed" in message for message in messages)
+    with (engine.LOG_DIR / "voice.log").open(encoding="utf-8") as handle:
+        contents = handle.read()
+    assert "state read failed" in contents
 
 
 def test_capture_command_timeout_is_logged(engine, monkeypatch):
     """Workspace helper command timeouts are observable but non-fatal."""
-    messages = []
-
     def fake_run(*args, **kwargs):
         raise engine.subprocess.TimeoutExpired(cmd=["xprop"], timeout=1.0)
 
     monkeypatch.setattr(engine.shutil, "which", lambda command: f"/usr/bin/{command}")
     monkeypatch.setattr(engine.subprocess, "run", fake_run)
-    monkeypatch.setattr(engine, "append_voice_log", messages.append)
 
     assert engine._capture_command(["xprop", "-root"]) == ""
-    assert any("command timed out" in message for message in messages)
+    contents = (engine.LOG_DIR / "voice.log").read_text(encoding="utf-8")
+    assert "command timed out" in contents
 
 
 def test_fallback_speak_logs_missing_synthesizer(engine, monkeypatch):
     """If no desktop fallback exists, the skipped speech path is logged."""
-    messages = []
-
     monkeypatch.delenv("ATTS_NO_AUDIO", raising=False)
     monkeypatch.setattr(engine.shutil, "which", lambda command: None)
-    monkeypatch.setattr(engine, "append_voice_log", messages.append)
 
     engine.fallback_speak("hello")
 
-    assert "fallback_speak skipped: no fallback synthesizer found" in messages
+    contents = (engine.LOG_DIR / "voice.log").read_text(encoding="utf-8")
+    assert "fallback_speak skipped: no fallback synthesizer found" in contents
