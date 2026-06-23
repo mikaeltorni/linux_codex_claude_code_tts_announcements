@@ -50,6 +50,7 @@ def test_installer_writes_config_hooks_without_replacing_binaries(tmp_path):
         env={
             "HOME": str(home),
             "TTS_TARGET_HOME": str(home),
+            "TTS_LOG_DIR": str(tmp_path / "install-log"),
             "CODEX_CONFIG_FILE": str(codex_config),
             "CODEX_HOOKS_FILE": str(codex_hooks),
             "CLAUDE_SETTINGS_FILE": str(claude_settings),
@@ -61,6 +62,8 @@ def test_installer_writes_config_hooks_without_replacing_binaries(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
+    install_log = tmp_path / "install-log/install.log"
+    assert "Installing Codex/Claude Code TTS announcement hooks" in install_log.read_text(encoding="utf-8")
     install_root = home / ".local/share/codex-claude-tts-announcements"
     assert (install_root / "scripts/notify_agent.py").is_file()
     # logging_utils backs the relative import in notify.py; it must ship too.

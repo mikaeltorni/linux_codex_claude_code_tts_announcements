@@ -1,7 +1,23 @@
 #!/usr/bin/env bash
 # install_hooks.sh - reusable installer helpers for generated notify hooks.
 
-tts_msg() { printf '[TTS] %s\n' "$*"; }
+# Resolve the directory for best-effort Bash installer diagnostics.
+tts_log_dir() {
+  printf '%s\n' "${TTS_LOG_DIR:-$SCRIPT_DIR/.log}"
+}
+
+# Mirror installer status to a file without changing stdout contracts.
+tts_log() {
+  local dir
+  dir="$(tts_log_dir)"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  printf '%s [install] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$dir/install.log" 2>/dev/null || true
+}
+
+tts_msg() {
+  printf '[TTS] %s\n' "$*"
+  tts_log "$*"
+}
 
 # Resolve the home directory that receives user-level config during install.
 # Tests and parent installers override TTS_TARGET_HOME for clean-home runs.

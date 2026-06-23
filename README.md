@@ -71,6 +71,16 @@ Tunables (env overrides win over the persisted values):
 - `ATTS_ANNOUNCE_WORKSPACE=0` — disable the spoken workspace suffix.
 - `ATTS_NO_AUDIO` — generate/cache clips but never play (used by tests).
 - `ATTS_STATE_DIR` — override the engine state/cache directory.
+- `ATTS_LOG_DIR` — override where `agent-tts` writes `voice.log`.
+
+## Logging
+
+Python diagnostics are routed through `lib/tts_announcements/logging_utils.py`.
+By default, source-checkout logs are written under this repository's `.log/`
+directory, while installed integrations can override the sink with
+`ATTS_LOG_DIR` or `AGENT_COMMAND_CENTER_LOG_DIR`. The Bash installer mirrors its
+status messages to `install.log` under `TTS_LOG_DIR` or the repository `.log/`
+directory without changing its stdout output.
 
 ## Prerequisites
 

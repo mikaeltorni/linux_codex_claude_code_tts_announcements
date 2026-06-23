@@ -24,6 +24,7 @@ from . import logging_utils as log
 
 #: Component tag applied to every log line emitted by this module.
 LOG_COMPONENT = "install"
+LOGGER = log.get_logger("tts_install", log.LOG_FILE_NAME)
 
 
 #: Matches the current generated Codex notify block (for idempotent replacement).
@@ -40,6 +41,7 @@ CODEX_LEGACY_BLOCK_RE = re.compile(
 LEGACY_NOTIFY_LINE_RE = re.compile(r'(?m)^notify = \["python3", ".*notify_agent\.py"\]\n+')
 
 
+@log.log_call(LOGGER)
 def configure_codex_notify(config_file: Path, command: str) -> None:
     """Write a generated notify block while preserving unrelated TOML.
 
@@ -73,6 +75,7 @@ def configure_codex_notify(config_file: Path, command: str) -> None:
     log.info(f"wrote Codex notify block to {config_file}", component=LOG_COMPONENT)
 
 
+@log.log_call(LOGGER)
 def configure_codex_hooks(hooks_file: Path, command: str) -> None:
     """Merge a Codex ``PermissionRequest`` attention hook.
 
@@ -188,6 +191,7 @@ def _prune_generated(hooks: dict[str, Any], event: str, generated_commands: set[
     hooks[event] = kept
 
 
+@log.log_call(LOGGER)
 def configure_claude_hooks(settings_file: Path, command: str) -> None:
     """Merge generated Claude Code hook commands while preserving user hooks.
 
