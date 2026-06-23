@@ -1,5 +1,7 @@
 # Linux Codex/Claude Code TTS Announcements
 
+> Part of [installation_scripts](https://github.com/mikaeltorni/installation_scripts) — the standalone **`agent-tts`** text-to-speech engine and notify hooks for **Codex**, **Claude Code**, and **Qwen** agents. Tested on Ubuntu 24.04.4 LTS; the Python engine is largely portable but the audio playback backend is currently Linux-specific (Windows/macOS untested).
+
 The agent text-to-speech home for Codex, Claude Code, and Qwen on Linux. This
 repository ships two things:
 
