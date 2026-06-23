@@ -158,10 +158,10 @@ def test_context_uses_codex_variables_for_codex_attention_hook(monkeypatch):
 def test_context_uses_claude_variables_for_direct_claude_hook(monkeypatch):
     """Direct Claude hooks should use Claude's voice and config home."""
     monkeypatch.setenv("CLAUDE_TTS_VOICE", "af_claude")
+    monkeypatch.setenv("CODEX__TTS_VOICE", "af_wrapper")
     monkeypatch.delenv("CODEX_AGENT_KIND", raising=False)
     monkeypatch.delenv("CODEX_AGENT_LABEL", raising=False)
     monkeypatch.delenv("CODEX_HOME", raising=False)
-    monkeypatch.delenv("CODEX__TTS_VOICE", raising=False)
 
     context = notify.context_for({"cwd": "/repo/demo"}, "claude")
 
@@ -188,10 +188,9 @@ def test_context_uses_qwen_variables_for_direct_qwen_hook(monkeypatch):
     assert context.model_name == "qwen-model"
 
 
-def test_context_normalized_wrapper_voice_wins(monkeypatch):
-    """ACC's normalized wrapper voice remains the highest-priority override."""
+def test_context_normalized_wrapper_voice_is_runtime_fallback(monkeypatch):
+    """ACC's normalized wrapper voice remains a compatibility fallback."""
     monkeypatch.setenv("CODEX_AGENT_KIND", "qwen")
     monkeypatch.setenv("CODEX__TTS_VOICE", "af_wrapper")
-    monkeypatch.setenv("QWEN_CODEX_TTS_VOICE", "af_qwen")
 
     assert notify.context_for({}, "codex").voice == "af_wrapper"

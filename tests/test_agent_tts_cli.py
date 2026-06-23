@@ -31,6 +31,7 @@ def cli(tmp_path, monkeypatch):
         "ACC_SILENT",
         "CODEX__TTS_VOICE",
         "CLAUDE_TTS_VOICE",
+        "CLAUDE_CODE_TTS_VOICE",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ATTS_STATE_DIR", str(tmp_path / "state"))
@@ -66,6 +67,23 @@ def test_silent_status_toggle(cli, capsys):
     assert cli.main(["silent", "on"]) == 0
     assert capsys.readouterr().out.strip() == "on"
     assert cli.engine.acc_silent_enabled() is True
+
+
+def test_silent_default_voice_honors_claude_code_alias(cli, monkeypatch, capsys):
+    """`silent` uses the Claude Code voice alias when no generic voice is set."""
+    spoken = {}
+    monkeypatch.setenv("CODEX__TTS_VOICE", "af_wrapper")
+    monkeypatch.setenv("CLAUDE_CODE_TTS_VOICE", "af_claude_code")
+    monkeypatch.setattr(
+        cli.engine,
+        "speak",
+        lambda text, voice, *a, **k: spoken.update(text=text, voice=voice) or True,
+    )
+
+    assert cli.main(["silent", "on"]) == 0
+
+    assert capsys.readouterr().out.strip() == "on"
+    assert spoken["voice"] == "af_claude_code"
 
 
 def test_voice_speaks_composed_text(cli, monkeypatch):

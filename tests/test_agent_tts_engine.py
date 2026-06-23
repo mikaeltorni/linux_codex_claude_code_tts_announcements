@@ -32,6 +32,7 @@ _ATTS_ENV = (
     "CODEX__TTS_VOICE",
     "CODEX_TTS_VOICE",
     "CLAUDE_TTS_VOICE",
+    "CLAUDE_CODE_TTS_VOICE",
     "QWEN_CODEX_TTS_VOICE",
 )
 
@@ -125,10 +126,31 @@ def test_voice_for_kind_claude_legacy_env(engine, monkeypatch):
     assert engine.voice_for_kind("claude", {}) == "af_river"
 
 
+def test_voice_for_kind_claude_code_legacy_env(engine, monkeypatch):
+    """The Claude Code voice alias selects the same Claude voice path."""
+    monkeypatch.setenv("CLAUDE_CODE_TTS_VOICE", "af_claude_code")
+    assert engine.voice_for_kind("claude", {}) == "af_claude_code"
+
+
+def test_voice_for_kind_claude_env_beats_normalized_wrapper(engine):
+    """Claude-specific voice config wins over a stale normalized wrapper value."""
+    assert (
+        engine.voice_for_kind(
+            "claude",
+            {
+                "CODEX__TTS_VOICE": "af_wrapper",
+                "CLAUDE_TTS_VOICE": "af_claude",
+            },
+        )
+        == "af_claude"
+    )
+
+
 def test_voice_for_kind_supports_runtime_specific_variables(engine):
     """Codex, Claude, and Qwen each honor their ATTS and legacy voice names."""
     assert engine.voice_for_kind("codex", {"ATTS_CODEX_VOICE": "af_codex"}) == "af_codex"
     assert engine.voice_for_kind("claude", {"ATTS_CLAUDE_VOICE": "af_claude"}) == "af_claude"
+    assert engine.voice_for_kind("claude", {"CLAUDE_CODE_TTS_VOICE": "af_legacy_claude"}) == "af_legacy_claude"
     assert engine.voice_for_kind("qwen", {"ATTS_QWEN_VOICE": "af_qwen"}) == "af_qwen"
     assert engine.voice_for_kind("codex", {"CODEX_TTS_VOICE": "af_legacy_codex"}) == "af_legacy_codex"
     assert engine.voice_for_kind("qwen", {"QWEN_CODEX_TTS_VOICE": "af_legacy_qwen"}) == "af_legacy_qwen"

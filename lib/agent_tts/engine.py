@@ -17,7 +17,8 @@ names are still honored as fallbacks so existing installs keep working:
   * ``ATTS_SILENT``           (was ``ACC_SILENT``)
   * ``ATTS_VOICE``            (was ``CODEX__TTS_VOICE``)
   * ``ATTS_CODEX_VOICE``      (was ``CODEX_TTS_VOICE``)
-  * ``ATTS_CLAUDE_VOICE``     (was ``CLAUDE_TTS_VOICE``)
+  * ``ATTS_CLAUDE_VOICE``     (was ``CLAUDE_TTS_VOICE`` /
+                                ``CLAUDE_CODE_TTS_VOICE``)
   * ``ATTS_QWEN_VOICE``       (was ``QWEN_CODEX_TTS_VOICE``)
   * ``ATTS_ANNOUNCE_WORKSPACE`` (was ``AGENT_COMMAND_CENTER_ANNOUNCE_WORKSPACE``)
   * ``ATTS_NO_AUDIO``         (was ``CODEX_AGENT_TRACKER_NO_AUDIO``)
@@ -480,16 +481,32 @@ def voice_for_kind(kind: str, env: dict[str, str]) -> str:
         """Return an explicit mapping value, then the process environment."""
         return env.get(name) or os.environ.get(name, "")
 
-    explicit = configured("ATTS_VOICE") or configured("CODEX__TTS_VOICE")
+    explicit = configured("ATTS_VOICE")
     if explicit:
         return explicit
     if kind == "qwen":
-        return configured("ATTS_QWEN_VOICE") or configured("QWEN_CODEX_TTS_VOICE") or "af_heart"
+        return (
+            configured("ATTS_QWEN_VOICE")
+            or configured("QWEN_CODEX_TTS_VOICE")
+            or configured("CODEX__TTS_VOICE")
+            or "af_heart"
+        )
     if kind == "claude":
-        return configured("ATTS_CLAUDE_VOICE") or configured("CLAUDE_TTS_VOICE") or "af_sky"
+        return (
+            configured("ATTS_CLAUDE_VOICE")
+            or configured("CLAUDE_TTS_VOICE")
+            or configured("CLAUDE_CODE_TTS_VOICE")
+            or configured("CODEX__TTS_VOICE")
+            or "af_sky"
+        )
     if kind == "api":
-        return "af_bella"
-    return configured("ATTS_CODEX_VOICE") or configured("CODEX_TTS_VOICE") or "af_bella"
+        return configured("CODEX__TTS_VOICE") or "af_bella"
+    return (
+        configured("ATTS_CODEX_VOICE")
+        or configured("CODEX_TTS_VOICE")
+        or configured("CODEX__TTS_VOICE")
+        or "af_bella"
+    )
 
 
 def with_workspace_suffix(text: str, workspace: str | None = None) -> str:

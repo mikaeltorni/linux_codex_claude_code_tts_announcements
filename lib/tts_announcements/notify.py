@@ -213,13 +213,18 @@ def runtime_kind(default_label: str, label: str) -> str:
 
 def voice_for_kind(kind: str) -> str:
     """Resolve generic, normalized-wrapper, and runtime-specific voice vars."""
-    generic = os.environ.get("ATTS_VOICE") or os.environ.get("CODEX__TTS_VOICE")
+    generic = os.environ.get("ATTS_VOICE")
     if generic:
         return generic
     names = {
-        "claude": ("ATTS_CLAUDE_VOICE", "CLAUDE_TTS_VOICE", "CLAUDE_CODE_TTS_VOICE"),
-        "codex": ("ATTS_CODEX_VOICE", "CODEX_TTS_VOICE"),
-        "qwen": ("ATTS_QWEN_VOICE", "QWEN_CODEX_TTS_VOICE"),
+        "claude": (
+            "ATTS_CLAUDE_VOICE",
+            "CLAUDE_TTS_VOICE",
+            "CLAUDE_CODE_TTS_VOICE",
+            "CODEX__TTS_VOICE",
+        ),
+        "codex": ("ATTS_CODEX_VOICE", "CODEX_TTS_VOICE", "CODEX__TTS_VOICE"),
+        "qwen": ("ATTS_QWEN_VOICE", "QWEN_CODEX_TTS_VOICE", "CODEX__TTS_VOICE"),
     }.get(kind, ())
     return next((value for name in names if (value := os.environ.get(name))), "")
 

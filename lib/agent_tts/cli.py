@@ -148,7 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     default_home = os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
-    default_voice = os.environ.get("ATTS_VOICE", os.environ.get("CODEX__TTS_VOICE", "af_sky"))
+    default_voice = engine.voice_for_kind("claude", os.environ)
 
     for name in ("voice", "say"):
         voice = sub.add_parser(name, help="speak a literal line of text")
