@@ -89,6 +89,45 @@ def test_installer_writes_config_hooks_without_replacing_binaries(tmp_path):
     assert "/old/notify_agent.py" not in stop_commands
 
 
+def test_single_hook_component_installs_core_and_only_that_hook(tmp_path):
+    """Selecting one hook must self-install the core and wire only that hook.
+
+    Guarantees the 'core works no matter what the user chooses' contract: a lone
+    per-hook component pulls in the engine + notify files it depends on, writes
+    only its own lifecycle event, and leaves every other runtime untouched.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    claude_settings = home / ".claude/settings.json"
+    codex_config = home / ".codex/config.toml"
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--select", "claude_stop"],
+        cwd=ROOT,
+        env={
+            "HOME": str(home),
+            "TTS_TARGET_HOME": str(home),
+            "TTS_LOG_DIR": str(tmp_path / "install-log"),
+            "CLAUDE_SETTINGS_FILE": str(claude_settings),
+            "CODEX_CONFIG_FILE": str(codex_config),
+            "PATH": "/usr/bin:/bin",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    install_root = home / ".local/share/codex-claude-tts-announcements"
+    # Core auto-installed despite engine/hook_files not being selected.
+    assert (install_root / "scripts/notify_agent.py").is_file()
+    assert (home / ".local/bin/agent-tts").exists()
+    # Only the requested Claude event is registered; no Codex config is created.
+    settings = json.loads(claude_settings.read_text(encoding="utf-8"))
+    assert list(settings["hooks"].keys()) == ["Stop"]
+    assert not codex_config.exists()
+
+
 def test_install_hook_shell_delegates_config_mutation_to_python_module():
     helper = (ROOT / "lib/install_hooks.sh").read_text(encoding="utf-8")
 

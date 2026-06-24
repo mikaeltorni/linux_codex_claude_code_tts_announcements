@@ -191,18 +191,38 @@ def _prune_generated(hooks: dict[str, Any], event: str, generated_commands: set[
     hooks[event] = kept
 
 
+#: Claude lifecycle events the notify hook registers on when none are named.
+#: Each event is independently selectable as its own installer component, so a
+#: caller may register exactly one event instead of the full set.
+DEFAULT_CLAUDE_EVENTS = (
+    "SessionStart",
+    "Stop",
+    "SubagentStop",
+    "UserPromptSubmit",
+    "Notification",
+)
+#: Events whose previously generated wiring is always pruned (and dropped when
+#: empty) so reruns clean up retired hooks regardless of which event is selected.
+RETIRED_CLAUDE_EVENTS = ("PreToolUse",)
+
+
 @log.log_call(LOGGER)
-def configure_claude_hooks(settings_file: Path, command: str) -> None:
+def configure_claude_hooks(
+    settings_file: Path, command: str, events: tuple[str, ...] | list[str] | None = None
+) -> None:
     """Merge generated Claude Code hook commands while preserving user hooks.
 
-    Registers the notify command on every relevant Claude hook event, pruning
-    any previously generated entries (current and legacy) first so reruns stay
-    idempotent and user-authored hooks are preserved.
+    Registers the notify command on the requested Claude lifecycle events,
+    pruning any previously generated entries (current and legacy) first so reruns
+    stay idempotent and user-authored hooks are preserved.
 
     Args:
         settings_file: Path to the Claude ``settings.json`` to update; created
             along with parent directories if missing.
         command: The notify hook command string to register on each event.
+        events: Specific lifecycle events to register; defaults to
+            :data:`DEFAULT_CLAUDE_EVENTS` when ``None``/empty. Passing a single
+            event lets each event be installed as its own component.
 
     Returns:
         None.
@@ -225,16 +245,13 @@ def configure_claude_hooks(settings_file: Path, command: str) -> None:
             }
         )
 
-    ensure_command("SessionStart")
-    ensure_command("Stop")
-    ensure_command("SubagentStop")
-    ensure_command("UserPromptSubmit")
-    ensure_command("Notification")
+    for event in events or DEFAULT_CLAUDE_EVENTS:
+        ensure_command(event)
 
     # Retired events: prune any previously generated command and drop the event
     # key when nothing else uses it, so reruns clean up the old wiring. The
     # destructive-command PreToolUse warning was removed by request.
-    for retired in ("PreToolUse",):
+    for retired in RETIRED_CLAUDE_EVENTS:
         _prune_generated(hooks, retired, generated_commands)
         if not hooks.get(retired):
             hooks.pop(retired, None)
@@ -266,6 +283,11 @@ def build_parser() -> argparse.ArgumentParser:
     claude = subcommands.add_parser("claude")
     claude.add_argument("settings_file", type=Path)
     claude.add_argument("command")
+    claude.add_argument(
+        "events",
+        nargs="*",
+        help="Lifecycle events to register; defaults to the full set when omitted.",
+    )
 
     return parser
 
@@ -286,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command_name == "codex-hooks":
         configure_codex_hooks(args.hooks_file, args.command)
     elif args.command_name == "claude":
-        configure_claude_hooks(args.settings_file, args.command)
+        configure_claude_hooks(args.settings_file, args.command, args.events)
     return 0
 
 

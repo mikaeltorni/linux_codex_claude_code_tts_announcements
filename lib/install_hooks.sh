@@ -71,27 +71,60 @@ install_tts_hook_files() {
   install -m 0755 "$SCRIPT_DIR/scripts/notify_agent.py" "$root/scripts/notify_agent.py"
 }
 
-# Merge the generated Codex notify command and PermissionRequest attention hook.
-configure_codex_notify_hook() {
-  local home config_file hooks_file command attention_command
+# Ensure the runtime core a notify hook depends on is present.
+#
+# The per-runtime hook components (codex_hook, claude_hooks) write config that
+# points at notify_agent.py and, through the tracker, at the agent-tts engine.
+# The shared component runtime has no dependency resolution, so a user may run a
+# hook component without selecting `engine`/`hook_files`. Both installers below
+# are idempotent, so calling them here guarantees the core works no matter which
+# components are selected without disturbing repeated full installs.
+ensure_tts_core() {
+  install_agent_tts_engine
+  install_tts_hook_files
+}
+
+# Write the generated Codex lifecycle notify block in config.toml.
+configure_codex_notify_block() {
+  local home config_file command
   home="$(tts_target_home)"
   config_file="${CODEX_CONFIG_FILE:-$home/.codex/config.toml}"
+  command="$(tts_hook_command)"
+  ensure_tts_core
+  mkdir -p "$(dirname "$config_file")"
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks codex "$config_file" "$command"
+  tts_msg "Configured Codex notify block in $config_file"
+}
+
+# Merge the Codex PermissionRequest attention hook in hooks.json.
+configure_codex_attention_hook() {
+  local home hooks_file command attention_command
+  home="$(tts_target_home)"
   hooks_file="${CODEX_HOOKS_FILE:-$home/.codex/hooks.json}"
   command="$(tts_hook_command)"
   attention_command="env CODEX_AGENT_KIND=codex CODEX_AGENT_LABEL=codex $command"
-  mkdir -p "$(dirname "$config_file")"
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks codex "$config_file" "$command"
+  ensure_tts_core
+  mkdir -p "$(dirname "$hooks_file")"
   PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks codex-hooks "$hooks_file" "$attention_command"
-  tts_msg "Configured Codex notify hooks in $config_file and $hooks_file"
+  tts_msg "Configured Codex attention hook in $hooks_file"
 }
 
-# Merge generated Claude Code hook commands while preserving user-authored hooks.
-configure_claude_notify_hooks() {
-  local home settings_file command
+# Register one Claude Code lifecycle event's notify hook. Each event is its own
+# selectable component; the writer prunes/re-adds only the named event so the
+# components compose without clobbering each other.
+configure_claude_event_hook() {
+  local event="$1" home settings_file command
   home="$(tts_target_home)"
   settings_file="${CLAUDE_SETTINGS_FILE:-$home/.claude/settings.json}"
   command="$(tts_hook_command)"
+  ensure_tts_core
   mkdir -p "$(dirname "$settings_file")"
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks claude "$settings_file" "$command"
-  tts_msg "Configured Claude Code hooks in $settings_file"
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks claude "$settings_file" "$command" "$event"
+  tts_msg "Configured Claude Code $event hook in $settings_file"
 }
+
+configure_claude_session_start_hook() { configure_claude_event_hook SessionStart; }
+configure_claude_stop_hook()          { configure_claude_event_hook Stop; }
+configure_claude_subagent_stop_hook() { configure_claude_event_hook SubagentStop; }
+configure_claude_user_prompt_hook()   { configure_claude_event_hook UserPromptSubmit; }
+configure_claude_notification_hook()  { configure_claude_event_hook Notification; }
