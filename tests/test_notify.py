@@ -170,6 +170,37 @@ def test_context_uses_claude_variables_for_direct_claude_hook(monkeypatch):
     assert context.codex_home == Path.home() / ".claude"
 
 
+def test_context_falls_back_to_default_claude_voice(monkeypatch):
+    """Bare ``claude`` (no voice env) must still resolve a concrete Kokoro voice.
+
+    Returning the engine default (``af_sky``) instead of an empty string is what
+    keeps the bare-binary hook on Kokoro: an empty voice makes the engine drop to
+    the desktop synthesizer fallback. This is the same voice the ACC ``cca``
+    wrapper produces, so both launch paths sound identical.
+    """
+    for name in (
+        "ATTS_VOICE",
+        "ATTS_CLAUDE_VOICE",
+        "CLAUDE_TTS_VOICE",
+        "CLAUDE_CODE_TTS_VOICE",
+        "CODEX__TTS_VOICE",
+        "CODEX_AGENT_KIND",
+        "CODEX_AGENT_LABEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    assert notify.context_for({"cwd": "/repo/demo"}, "claude").voice == "af_sky"
+
+
+def test_context_uses_claude_code_tts_voice_alias(monkeypatch):
+    """The ``CLAUDE_CODE_TTS_VOICE`` alias overrides the claude default."""
+    for name in ("ATTS_VOICE", "ATTS_CLAUDE_VOICE", "CLAUDE_TTS_VOICE", "CODEX__TTS_VOICE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_TTS_VOICE", "am_onyx")
+
+    assert notify.context_for({"cwd": "/repo/demo"}, "claude").voice == "am_onyx"
+
+
 def test_context_uses_qwen_variables_for_direct_qwen_hook(monkeypatch):
     """Qwen's Local label should select its own voice, model, and config home."""
     monkeypatch.setenv("CODEX_AGENT_LABEL", "Local")
