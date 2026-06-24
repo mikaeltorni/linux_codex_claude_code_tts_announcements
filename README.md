@@ -93,8 +93,36 @@ directory without changing its stdout output.
 ## Installation
 
 ```bash
-bash install.sh
+bash install.sh              # interactive component menu (or default-on set)
+bash install.sh --default    # install all default-on components, no prompts
+bash install.sh --all        # install every component
+bash install.sh --list-components
+bash install.sh --select engine,claude_stop   # install exactly these
 ```
+
+### Selectable components
+
+Every individual notify hook is its own optional, default-on component, so you
+can wire up exactly the runtimes and lifecycle events you use. The `engine` and
+`hook_files` core stay default-on, and **each hook component also self-installs
+that core**, so the program works no matter which subset you pick.
+
+| Component | What it installs |
+|---|---|
+| `engine` | `agent-tts` speech engine + `~/.local/bin/agent-tts` symlink |
+| `hook_files` | notify hook code under `~/.local/share/codex-claude-tts-announcements/` |
+| `codex_notify` | Codex lifecycle `notify = [...]` block in `~/.codex/config.toml` |
+| `codex_attention` | Codex `PermissionRequest` attention hook in `~/.codex/hooks.json` |
+| `claude_session_start` | Claude Code `SessionStart` hook |
+| `claude_stop` | Claude Code `Stop` hook |
+| `claude_subagent_stop` | Claude Code `SubagentStop` hook |
+| `claude_user_prompt` | Claude Code `UserPromptSubmit` hook |
+| `claude_notification` | Claude Code `Notification` hook |
+
+The Claude and Codex hook writers are idempotent and preserve unrelated
+user-authored hooks; reruns also remove the retired Agent Command Center
+`notify_agent.py` hook entries. None of these replace or symlink the `codex` or
+`claude` binaries.
 
 ## Integration with Agent Command Center
 
