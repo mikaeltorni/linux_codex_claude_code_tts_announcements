@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agent_tts import engine as tts_engine
+
 from . import logging_utils as log
 
 #: Component tag applied to every log line emitted by this module.
@@ -212,21 +214,22 @@ def runtime_kind(default_label: str, label: str) -> str:
 
 
 def voice_for_kind(kind: str) -> str:
-    """Resolve generic, normalized-wrapper, and runtime-specific voice vars."""
-    generic = os.environ.get("ATTS_VOICE")
-    if generic:
-        return generic
-    names = {
-        "claude": (
-            "ATTS_CLAUDE_VOICE",
-            "CLAUDE_TTS_VOICE",
-            "CLAUDE_CODE_TTS_VOICE",
-            "CODEX__TTS_VOICE",
-        ),
-        "codex": ("ATTS_CODEX_VOICE", "CODEX_TTS_VOICE", "CODEX__TTS_VOICE"),
-        "qwen": ("ATTS_QWEN_VOICE", "QWEN_CODEX_TTS_VOICE", "CODEX__TTS_VOICE"),
-    }.get(kind, ())
-    return next((value for name in names if (value := os.environ.get(name))), "")
+    """Resolve the runtime's TTS voice, always returning a concrete default.
+
+    Delegates to the ``agent-tts`` engine — the single owner of voice selection
+    (see the repository README) — so the same env precedence *and* the per-kind
+    Kokoro default (e.g. claude -> ``af_sky``) apply whether an agent is launched
+    through the ACC ``cca`` wrapper, which exports ``CODEX__TTS_VOICE``, or the
+    bare ``claude`` binary, which exports nothing.
+
+    Returning a concrete voice rather than an empty string is what keeps the
+    bare-binary path on Kokoro: ``engine.speak_with_kokoro`` bails on a falsy
+    voice and the announcement silently drops to the robotic desktop synthesizer
+    fallback. Before this delegation the hook passed ``--voice ""`` whenever no
+    voice env var was set, so plain ``claude`` spoke the desktop fallback voice
+    while ``cca`` spoke the real ``af_sky`` Kokoro voice.
+    """
+    return tts_engine.voice_for_kind(kind, os.environ)
 
 
 def context_for(payload: dict[str, Any], default_label: str) -> RuntimeContext:
