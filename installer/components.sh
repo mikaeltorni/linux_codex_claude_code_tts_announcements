@@ -17,13 +17,13 @@ ISC_REPO_LABEL="Codex/Claude Code TTS announcements"
 # self-installs that core (see ensure_tts_core in lib/install_hooks.sh), so the
 # program works no matter which subset is selected.
 ISC_COMPONENTS=(
-  "engine|Agent TTS (agent-tts) speech engine|on|install_agent_tts_engine"
-  "hook_files|TTS notify hook files|on|install_tts_hook_files"
-  "codex_notify|Codex lifecycle notify block (config.toml)|on|configure_codex_notify_block"
-  "codex_attention|Codex PermissionRequest attention hook (hooks.json)|on|configure_codex_attention_hook"
-  "claude_session_start|Claude Code SessionStart hook|on|configure_claude_session_start_hook"
-  "claude_stop|Claude Code Stop hook|on|configure_claude_stop_hook"
-  "claude_subagent_stop|Claude Code SubagentStop hook|on|configure_claude_subagent_stop_hook"
-  "claude_user_prompt|Claude Code UserPromptSubmit hook|on|configure_claude_user_prompt_hook"
-  "claude_notification|Claude Code Notification hook|on|configure_claude_notification_hook"
+  "engine|Agent TTS (agent-tts) speech engine|on|install_agent_tts_engine|detect_engine|uninstall_engine"
+  "hook_files|TTS notify hook files|on|install_tts_hook_files|detect_hook_files|uninstall_hook_files"
+  "codex_notify|Codex lifecycle notify block (config.toml)|on|configure_codex_notify_block|detect_codex_notify|uninstall_codex_notify"
+  "codex_attention|Codex PermissionRequest attention hook (hooks.json)|on|configure_codex_attention_hook|detect_codex_attention|uninstall_codex_attention"
+  "claude_session_start|Claude Code SessionStart hook|on|configure_claude_session_start_hook|detect_claude_session_start|uninstall_claude_session_start"
+  "claude_stop|Claude Code Stop hook|on|configure_claude_stop_hook|detect_claude_stop|uninstall_claude_stop"
+  "claude_subagent_stop|Claude Code SubagentStop hook|on|configure_claude_subagent_stop_hook|detect_claude_subagent_stop|uninstall_claude_subagent_stop"
+  "claude_user_prompt|Claude Code UserPromptSubmit hook|on|configure_claude_user_prompt_hook|detect_claude_user_prompt|uninstall_claude_user_prompt"
+  "claude_notification|Claude Code Notification hook|on|configure_claude_notification_hook|detect_claude_notification|uninstall_claude_notification"
 )

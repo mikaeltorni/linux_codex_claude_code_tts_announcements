@@ -128,3 +128,80 @@ configure_claude_stop_hook()          { configure_claude_event_hook Stop; }
 configure_claude_subagent_stop_hook() { configure_claude_event_hook SubagentStop; }
 configure_claude_user_prompt_hook()   { configure_claude_event_hook UserPromptSubmit; }
 configure_claude_notification_hook()  { configure_claude_event_hook Notification; }
+
+###############################################################################
+# Detection and uninstall (component lifecycle)
+###############################################################################
+# detect_* report live state for --detect; uninstall_* reverse each component.
+# The config-block components delegate removal to the symmetric remove-* CLI in
+# tts_announcements.install_hooks so the exact generated content (and only that)
+# is stripped, preserving user-authored config.
+
+# tts_config_has - true when $1 (a config file) references the notify hook.
+tts_config_has() {
+  [ -f "$1" ] && grep -q 'notify_agent.py' "$1" 2>/dev/null
+}
+
+detect_engine()       { [ -e "$(tts_bin_dir)/agent-tts" ] || [ -f "$(tts_install_root)/scripts/agent-tts" ]; }
+detect_hook_files()   { [ -f "$(tts_install_root)/scripts/notify_agent.py" ]; }
+detect_codex_notify() { tts_config_has "${CODEX_CONFIG_FILE:-$(tts_target_home)/.codex/config.toml}"; }
+detect_codex_attention() {
+  local f="${CODEX_HOOKS_FILE:-$(tts_target_home)/.codex/hooks.json}"
+  [ -f "$f" ] && grep -q 'PermissionRequest' "$f" 2>/dev/null && grep -q 'notify_agent.py' "$f" 2>/dev/null
+}
+# A Claude event hook is present when settings.json registers our command under
+# that event. The pruning is event-specific, so detection greps the event name.
+_tts_claude_has_event() {
+  local event="$1" f="${CLAUDE_SETTINGS_FILE:-$(tts_target_home)/.claude/settings.json}"
+  [ -f "$f" ] || return 1
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 - "$f" "$event" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+event = sys.argv[2]
+entries = (data.get("hooks") or {}).get(event) or []
+for entry in entries if isinstance(entries, list) else []:
+    for h in (entry.get("hooks") or []) if isinstance(entry, dict) else []:
+        if isinstance(h, dict) and "notify_agent.py" in str(h.get("command", "")):
+            sys.exit(0)
+sys.exit(1)
+PY
+}
+detect_claude_session_start() { _tts_claude_has_event SessionStart; }
+detect_claude_stop()          { _tts_claude_has_event Stop; }
+detect_claude_subagent_stop() { _tts_claude_has_event SubagentStop; }
+detect_claude_user_prompt()   { _tts_claude_has_event UserPromptSubmit; }
+detect_claude_notification()  { _tts_claude_has_event Notification; }
+
+uninstall_engine() {
+  tts_msg "Removing agent-tts engine"
+  rm -f "$(tts_bin_dir)/agent-tts"
+  rm -rf "$(tts_install_root)/lib/agent_tts" "$(tts_install_root)/scripts/agent-tts"
+}
+uninstall_hook_files() {
+  tts_msg "Removing TTS notify hook files"
+  rm -rf "$(tts_install_root)/lib/tts_announcements" "$(tts_install_root)/scripts/notify_agent.py"
+}
+uninstall_codex_notify() {
+  local f="${CODEX_CONFIG_FILE:-$(tts_target_home)/.codex/config.toml}"
+  tts_msg "Removing Codex notify block from $f"
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks remove-codex "$f"
+}
+uninstall_codex_attention() {
+  local f="${CODEX_HOOKS_FILE:-$(tts_target_home)/.codex/hooks.json}"
+  tts_msg "Removing Codex attention hook from $f"
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks remove-codex-hooks "$f"
+}
+_tts_remove_claude_event() {
+  local event="$1" f="${CLAUDE_SETTINGS_FILE:-$(tts_target_home)/.claude/settings.json}"
+  tts_msg "Removing Claude $event notify hook from $f"
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+    remove-claude "$f" "$(tts_hook_command)" "$event"
+}
+uninstall_claude_session_start() { _tts_remove_claude_event SessionStart; }
+uninstall_claude_stop()          { _tts_remove_claude_event Stop; }
+uninstall_claude_subagent_stop() { _tts_remove_claude_event SubagentStop; }
+uninstall_claude_user_prompt()   { _tts_remove_claude_event UserPromptSubmit; }
+uninstall_claude_notification()  { _tts_remove_claude_event Notification; }
