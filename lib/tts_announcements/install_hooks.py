@@ -107,8 +107,7 @@ def configure_codex_hooks(hooks_file: Path, command: str) -> None:
             for handler in entry["hooks"]
             if not (
                 isinstance(handler, dict)
-                and isinstance(handler.get("command"), str)
-                and "codex-claude-tts-announcements/scripts/notify_agent.py" in handler["command"]
+                and _is_generated_notify_command(handler.get("command"))
             )
         ]
         if handlers:
@@ -149,6 +148,18 @@ def _read_settings(settings_file: Path) -> dict[str, Any]:
     except OSError as exc:
         log.error(f"could not read settings {settings_file}: {exc}", component=LOG_COMPONENT)
     return {}
+
+
+def _is_generated_notify_command(command: Any) -> bool:
+    """Return whether a hook command belongs to this installer.
+
+    Args:
+        command: Candidate hook command value from a settings file.
+
+    Returns:
+        bool: True for generated ``notify_agent.py`` command strings.
+    """
+    return isinstance(command, str) and "notify_agent.py" in command
 
 
 def _prune_generated(hooks: dict[str, Any], event: str, generated_commands: set[str]) -> None:
@@ -261,6 +272,109 @@ def configure_claude_hooks(
     log.info(f"merged Claude hooks into {settings_file}", component=LOG_COMPONENT)
 
 
+@log.log_call(LOGGER)
+def remove_codex_notify(config_file: Path) -> None:
+    """Strip the generated Codex notify block, leaving unrelated TOML intact.
+
+    The inverse of :func:`configure_codex_notify`; safe when the file or block is
+    absent.
+
+    Args:
+        config_file: Path to the Codex ``config.toml`` to clean.
+    """
+    try:
+        text = config_file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return
+    text = CODEX_TTS_BLOCK_RE.sub("", text)
+    text = CODEX_LEGACY_BLOCK_RE.sub("", text)
+    text = LEGACY_NOTIFY_LINE_RE.sub("", text)
+    config_file.write_text(text.lstrip("\n"), encoding="utf-8")
+    log.info(f"removed Codex notify block from {config_file}", component=LOG_COMPONENT)
+
+
+@log.log_call(LOGGER)
+def remove_codex_hooks(hooks_file: Path) -> None:
+    """Remove the generated Codex ``PermissionRequest`` attention handler.
+
+    Preserves user-authored handlers and other events; drops the event key when
+    nothing else uses it. The inverse of :func:`configure_codex_hooks`.
+
+    Args:
+        hooks_file: User-level Codex ``hooks.json`` path.
+    """
+    try:
+        settings = _read_settings(hooks_file)
+    except FileNotFoundError:
+        return
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return
+    event = "PermissionRequest"
+    entries = hooks.get(event, [])
+    if not isinstance(entries, list):
+        return
+    kept = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+            kept.append(entry)
+            continue
+        handlers = [
+            handler
+            for handler in entry["hooks"]
+            if not (
+                isinstance(handler, dict)
+                and _is_generated_notify_command(handler.get("command"))
+            )
+        ]
+        if handlers:
+            updated = dict(entry)
+            updated["hooks"] = handlers
+            kept.append(updated)
+    if kept:
+        hooks[event] = kept
+    else:
+        hooks.pop(event, None)
+    if not hooks:
+        settings.pop("hooks", None)
+    hooks_file.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    log.info(f"removed Codex attention hook from {hooks_file}", component=LOG_COMPONENT)
+
+
+@log.log_call(LOGGER)
+def remove_claude_hooks(
+    settings_file: Path, command: str, events: tuple[str, ...] | list[str] | None = None
+) -> None:
+    """Remove generated Claude hook commands for the named events.
+
+    The inverse of :func:`configure_claude_hooks`: prunes only generated command
+    entries (preserving user-authored hooks), drops emptied event keys, and drops
+    the ``hooks`` map when empty.
+
+    Args:
+        settings_file: Path to the Claude ``settings.json`` to clean.
+        command: The generated notify command string to prune.
+        events: Lifecycle events to clean; defaults to the full set when empty.
+    """
+    try:
+        settings = _read_settings(settings_file)
+    except FileNotFoundError:
+        return
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return
+    legacy_acc_command = f"python3 {settings_file.parent / 'notify_agent.py'}"
+    generated_commands = {command, legacy_acc_command}
+    for event in events or DEFAULT_CLAUDE_EVENTS:
+        _prune_generated(hooks, event, generated_commands)
+        if not hooks.get(event):
+            hooks.pop(event, None)
+    if not hooks:
+        settings.pop("hooks", None)
+    settings_file.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    log.info(f"removed Claude hooks from {settings_file}", component=LOG_COMPONENT)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Create the install hook config CLI parser.
 
@@ -289,6 +403,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Lifecycle events to register; defaults to the full set when omitted.",
     )
 
+    # Symmetric removal subcommands (used by the component uninstall path).
+    rm_codex = subcommands.add_parser("remove-codex")
+    rm_codex.add_argument("config_file", type=Path)
+
+    rm_codex_hooks = subcommands.add_parser("remove-codex-hooks")
+    rm_codex_hooks.add_argument("hooks_file", type=Path)
+
+    rm_claude = subcommands.add_parser("remove-claude")
+    rm_claude.add_argument("settings_file", type=Path)
+    rm_claude.add_argument("command")
+    rm_claude.add_argument("events", nargs="*")
+
     return parser
 
 
@@ -309,6 +435,12 @@ def main(argv: list[str] | None = None) -> int:
         configure_codex_hooks(args.hooks_file, args.command)
     elif args.command_name == "claude":
         configure_claude_hooks(args.settings_file, args.command, args.events)
+    elif args.command_name == "remove-codex":
+        remove_codex_notify(args.config_file)
+    elif args.command_name == "remove-codex-hooks":
+        remove_codex_hooks(args.hooks_file)
+    elif args.command_name == "remove-claude":
+        remove_claude_hooks(args.settings_file, args.command, args.events)
     return 0
 
 
