@@ -501,6 +501,13 @@ def voice_for_kind(kind: str, env: dict[str, str]) -> str:
         )
     if kind == "api":
         return configured("CODEX__TTS_VOICE") or "af_bella"
+    if kind == "cline":
+        return (
+            configured("ATTS_CLINE_VOICE")
+            or configured("CLINE_TTS_VOICE")
+            or configured("CODEX__TTS_VOICE")
+            or "af_aoede"
+        )
     return (
         configured("ATTS_CODEX_VOICE")
         or configured("CODEX_TTS_VOICE")
