@@ -24,6 +24,8 @@ _ATTS_ENV = (
     "ATTS_CODEX_VOICE",
     "ATTS_CLAUDE_VOICE",
     "ATTS_QWEN_VOICE",
+    "ATTS_CLINE_VOICE",
+    "ATTS_MODEL_DIR",
     "ATTS_ANNOUNCE_WORKSPACE",
     "ATTS_NO_AUDIO",
     "AGENT_COMMAND_CENTER_TTS_SPEED",
@@ -34,6 +36,7 @@ _ATTS_ENV = (
     "CLAUDE_TTS_VOICE",
     "CLAUDE_CODE_TTS_VOICE",
     "QWEN_CODEX_TTS_VOICE",
+    "CLINE_TTS_VOICE",
 )
 
 
@@ -153,8 +156,22 @@ def test_voice_for_kind_supports_runtime_specific_variables(engine):
     assert engine.voice_for_kind("claude", {"ATTS_CLAUDE_VOICE": "af_claude"}) == "af_claude"
     assert engine.voice_for_kind("claude", {"CLAUDE_CODE_TTS_VOICE": "af_legacy_claude"}) == "af_legacy_claude"
     assert engine.voice_for_kind("qwen", {"ATTS_QWEN_VOICE": "af_qwen"}) == "af_qwen"
+    assert engine.voice_for_kind("cline", {"ATTS_CLINE_VOICE": "af_cline"}) == "af_cline"
+    assert engine.voice_for_kind("cline", {"CLINE_TTS_VOICE": "af_legacy_cline"}) == "af_legacy_cline"
     assert engine.voice_for_kind("codex", {"CODEX_TTS_VOICE": "af_legacy_codex"}) == "af_legacy_codex"
     assert engine.voice_for_kind("qwen", {"QWEN_CODEX_TTS_VOICE": "af_legacy_qwen"}) == "af_legacy_qwen"
+
+
+def test_cline_and_claude_reuse_shared_codex_kokoro_assets(engine, monkeypatch, tmp_path):
+    """Agent homes without TTS models should use the shared ~/.codex assets."""
+    shared = tmp_path / ".codex/tts"
+    shared.mkdir(parents=True)
+    (shared / "kokoro-v1.0.onnx").write_bytes(b"model")
+    (shared / "voices-v1.0.bin").write_bytes(b"voices")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    assert engine.resolve_tts_dir(tmp_path / ".cline") == shared
+    assert engine.resolve_tts_dir(tmp_path / ".claude") == shared
 
 
 def test_workspace_suffix_disabled(engine):

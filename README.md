@@ -1,6 +1,6 @@
 # Linux Codex/Claude Code TTS Announcements
 
-> Part of [installation_scripts](https://github.com/mikaeltorni/installation_scripts) — the standalone **`agent-tts`** text-to-speech engine and notify hooks for **Codex**, **Claude Code**, and **Qwen** agents. Tested on Ubuntu 24.04.4 LTS; the Python engine is largely portable but the audio playback backend is currently Linux-specific (Windows/macOS untested).
+> Part of [installation_scripts](https://github.com/mikaeltorni/installation_scripts) — the standalone **`agent-tts`** text-to-speech engine and notify hooks for **Codex**, **Claude Code**, **Cline**, and **Qwen** agents. Tested on Ubuntu 24.04.4 LTS; the Python engine is largely portable but the audio playback backend is currently Linux-specific (Windows/macOS untested).
 
 The agent text-to-speech home for Codex, Claude Code, and Qwen on Linux. This
 repository ships two things:
@@ -8,7 +8,7 @@ repository ships two things:
 1. **`agent-tts`** — the standalone speech engine that owns *all* agent TTS:
    Kokoro synthesis, ffmpeg volume amplification, playback, voice selection, the
    speed/volume/silent tunables, and the spoken start/finish/clarify wording.
-2. **Notify hooks** — Codex and Claude Code hooks that turn agent lifecycle
+2. **Notify hooks** — Codex, Claude Code, and Cline hooks that turn agent lifecycle
    events into spoken start/finish/attention/danger announcements.
 
 ## Repository dependencies
@@ -46,6 +46,7 @@ When installed, this repo:
 - writes a generated Codex `notify = [...]` block in `$HOME/.codex/config.toml`
 - adds a Codex `PermissionRequest` attention hook to `$HOME/.codex/hooks.json`
 - adds generated Claude Code hook commands to `$HOME/.claude/settings.json`
+- adds executable Cline lifecycle hooks under `$HOME/.cline/hooks/`
 - removes the retired Agent Command Center `notify_agent.py` hook entries
 
 It does not replace or symlink the `codex` or `claude` binaries.
@@ -65,11 +66,14 @@ Tunables (env overrides win over the persisted values):
 - `ATTS_VOLUME_PERCENT` — linear volume percentage (default `1000`).
 - `ATTS_SILENT` — set truthy to mute one invocation.
 - `ATTS_VOICE` — global voice override.
-- `ATTS_CODEX_VOICE`, `ATTS_CLAUDE_VOICE`, and `ATTS_QWEN_VOICE` —
+- `ATTS_CODEX_VOICE`, `ATTS_CLAUDE_VOICE`, `ATTS_CLINE_VOICE`, and `ATTS_QWEN_VOICE` —
   per-runtime overrides when `ATTS_VOICE` is unset. Legacy
   `CODEX_TTS_VOICE`, `CLAUDE_TTS_VOICE`, and `QWEN_CODEX_TTS_VOICE` remain
   supported. ACC wrappers' normalized `CODEX__TTS_VOICE` also remains
   supported and takes precedence over per-runtime legacy names.
+- `ATTS_MODEL_DIR` — optional shared Kokoro model directory. Cline and Claude
+  automatically reuse `~/.codex/tts` when their own config homes have no model
+  assets, avoiding duplicate downloads and robotic fallback speech.
 - `ATTS_ANNOUNCE_WORKSPACE=0` — disable the spoken workspace suffix.
 - `ATTS_NO_AUDIO` — generate/cache clips but never play (used by tests).
 - `ATTS_STATE_DIR` — override the engine state/cache directory.
@@ -118,6 +122,13 @@ that core**, so the program works no matter which subset you pick.
 | `claude_subagent_stop` | Claude Code `SubagentStop` hook |
 | `claude_user_prompt` | Claude Code `UserPromptSubmit` hook |
 | `claude_notification` | Claude Code `Notification` hook |
+| `cline_task_start` | Cline `TaskStart` hook |
+| `cline_task_resume` | Cline `TaskResume` hook |
+| `cline_task_complete` | Cline `TaskComplete` hook |
+| `cline_task_cancel` | Cline `TaskCancel` hook |
+| `cline_task_error` | Cline `TaskError` hook (supported by current CLI releases) |
+| `cline_user_prompt` | Cline `UserPromptSubmit` hook |
+| `cline_pre_tool_use` | Cline `PreToolUse` hook — speaks an attention prompt when Cline calls `ask_question` |
 
 The Claude and Codex hook writers are idempotent and preserve unrelated
 user-authored hooks; reruns also remove the retired Agent Command Center

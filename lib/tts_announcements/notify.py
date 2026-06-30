@@ -1,6 +1,6 @@
-"""Shared notify hook logic for Codex and Claude Code.
+"""Shared notify hook logic for Codex, Claude Code, and Cline.
 
-The module accepts Codex notify JSON as the first CLI argument and Claude Code
+The module accepts Codex notify JSON as the first CLI argument and Claude/Cline
 hook JSON on stdin. It delegates speech and title updates to
 ``codex-agent-tracker`` so announcement wording remains centralized there.
 
@@ -10,8 +10,8 @@ Components:
   - context_for: Build a RuntimeContext from a payload and the environment.
   - announce / clarify / update_title / notify_turn_complete: Tracker actions.
   - transcript_prompt: Extract the latest user prompt from a Claude transcript.
-  - handle_codex / handle_claude: Route a decoded payload to tracker actions.
-  - main: CLI entry point for both Codex and Claude hook styles.
+  - handle_codex / handle_claude / handle_cline: Route payloads to tracker actions.
+  - main: CLI entry point for all supported hook styles.
 
 Diagnostic logging is delegated to :mod:`tts_announcements.logging_utils`; all
 log lines from this module use the ``"notify"`` component tag.
@@ -174,6 +174,17 @@ def normalize_text(value: str) -> str:
     return " ".join((value or "").split())
 
 
+def workspace_path_from(payload: dict[str, Any]) -> str:
+    """Resolve the primary workspace path from Claude/Codex or Cline payloads."""
+    cwd = payload.get("cwd")
+    if isinstance(cwd, str) and cwd:
+        return cwd
+    roots = payload.get("workspaceRoots")
+    if isinstance(roots, list) and roots and isinstance(roots[0], str):
+        return roots[0]
+    return ""
+
+
 def project_name_from(payload: dict[str, Any]) -> str:
     """Resolve a human project name from environment metadata or cwd.
 
@@ -191,8 +202,7 @@ def project_name_from(payload: dict[str, Any]) -> str:
     if name:
         return name
     project_path = os.environ.get("CODEX_AGENT_PROJECT_PATH", "")
-    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else ""
-    path = project_path or cwd
+    path = project_path or workspace_path_from(payload)
     if path:
         resolved = Path(path).expanduser()
         return resolved.name or str(resolved)
@@ -202,15 +212,15 @@ def project_name_from(payload: dict[str, Any]) -> str:
 def runtime_kind(default_label: str, label: str) -> str:
     """Resolve the agent kind for payload formats shared by multiple runtimes."""
     explicit = normalize_text(os.environ.get("CODEX_AGENT_KIND", "")).casefold()
-    if explicit in {"api", "claude", "codex", "qwen"}:
+    if explicit in {"api", "claude", "cline", "codex", "qwen"}:
         return explicit
     normalized_label = normalize_text(label).casefold()
     if normalized_label.startswith(("local", "qwen")):
         return "qwen"
-    for kind in ("claude", "codex", "api"):
+    for kind in ("claude", "cline", "codex", "api"):
         if normalized_label.startswith(kind):
             return kind
-    return default_label if default_label in {"claude", "codex"} else "codex"
+    return default_label if default_label in {"claude", "cline", "codex"} else "codex"
 
 
 def voice_for_kind(kind: str) -> str:
@@ -246,7 +256,7 @@ def context_for(payload: dict[str, Any], default_label: str) -> RuntimeContext:
         RuntimeContext: Fully resolved, immutable context for the event.
     """
     project_path = os.environ.get("CODEX_AGENT_PROJECT_PATH", "")
-    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else ""
+    cwd = workspace_path_from(payload)
     label = normalize_text(os.environ.get("CODEX_AGENT_LABEL", "")) or default_label
     kind = runtime_kind(default_label, label)
     voice = voice_for_kind(kind)
@@ -254,6 +264,7 @@ def context_for(payload: dict[str, Any], default_label: str) -> RuntimeContext:
         "claude": ".claude",
         "qwen": ".codex-qwen",
         "api": ".codex-api",
+        "cline": ".cline",
     }.get(kind, ".codex")
     codex_home = Path(os.environ.get("CODEX_HOME") or default_home)
     model_name = normalize_text(
@@ -499,6 +510,68 @@ def handle_claude(payload: dict[str, Any]) -> int:
     return 0
 
 
+def handle_cline(payload: dict[str, Any]) -> int:
+    """Route documented and current Cline lifecycle payloads to the tracker.
+
+    Cline has no dedicated "needs attention" event like Claude's Notification,
+    so the ``PreToolUse`` (``tool_call``) hook is used instead: when Cline calls
+    its ``ask_question`` tool, an attention prompt is spoken, matching the
+    clarification behavior of Claude and Codex. Every other tool call is silent.
+
+    Args:
+        payload: Cline hook JSON. Public releases use event filenames such as
+            ``TaskStart`` while Cline 3.x payloads use ``agent_start`` names.
+
+    Returns:
+        int: Always ``0`` so TTS cannot block a Cline task.
+    """
+    event = str(payload.get("hookName", ""))
+    context = context_for(payload, "cline")
+    log.info(
+        f"Cline event={event} project={context.project_name}",
+        component=LOG_COMPONENT,
+    )
+    if event in {"TaskStart", "TaskResume", "agent_start", "agent_resume"}:
+        announce("start", context)
+    elif event in {
+        "TaskComplete",
+        "TaskCancel",
+        "TaskError",
+        "agent_end",
+        "agent_abort",
+        "agent_error",
+    }:
+        section = (
+            payload.get("taskComplete")
+            or payload.get("taskCancel")
+            or payload.get("taskError")
+            or {}
+        )
+        task = normalize_text(str(section.get("task", ""))) if isinstance(section, dict) else ""
+        announce("finish", context, task_description=task)
+    elif event in {"UserPromptSubmit", "prompt_submit"}:
+        section = payload.get("userPromptSubmit") or {}
+        prompt = str(section.get("prompt", "")) if isinstance(section, dict) else ""
+        update_title(prompt, context)
+    elif event in {"PreToolUse", "tool_call"}:
+        # PreToolUse fires before every tool call. Only the ask_question tool
+        # pauses for user input, so speak an attention prompt for it and stay
+        # silent for routine tool execution (the bash hook guard skips the
+        # Python process entirely for non-attention tools).
+        tool_call = payload.get("tool_call") or {}
+        if not isinstance(tool_call, dict):
+            return 0
+        if str(tool_call.get("name", "")) != "ask_question":
+            return 0
+        tool_input = tool_call.get("input") or {}
+        question = normalize_text(
+            str(tool_input.get("question", "")) if isinstance(tool_input, dict) else ""
+        )
+        default_message = f"{context.label.capitalize()} needs your attention"
+        clarify(context, question or default_message)
+    return 0
+
+
 def main(argv: list[str] | None = None, stdin_text: str | None = None) -> int:
     """CLI entry point for both Codex and Claude hook styles.
 
@@ -514,6 +587,8 @@ def main(argv: list[str] | None = None, stdin_text: str | None = None) -> int:
     payload = parse_payload(argv, stdin_text=stdin_text)
     if not payload:
         return 0
+    if "hookName" in payload:
+        return handle_cline(payload)
     if "hook_event_name" in payload:
         return handle_claude(payload)
     return handle_codex(payload)

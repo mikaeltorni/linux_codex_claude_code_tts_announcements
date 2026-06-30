@@ -9,7 +9,7 @@
 # Entry format: "id|label|default(on/off)|function".
 
 ISC_REPO_NAME="linux_codex_claude_code_tts_announcements"
-ISC_REPO_LABEL="Codex/Claude Code TTS announcements"
+ISC_REPO_LABEL="Codex/Claude Code/Cline TTS announcements"
 
 # Every individual notify hook is its own selectable, optional component so a
 # user can wire up exactly the runtimes and lifecycle events they use. The
@@ -26,4 +26,11 @@ ISC_COMPONENTS=(
   "claude_subagent_stop|Claude Code SubagentStop hook|on|configure_claude_subagent_stop_hook|detect_claude_subagent_stop|uninstall_claude_subagent_stop"
   "claude_user_prompt|Claude Code UserPromptSubmit hook|on|configure_claude_user_prompt_hook|detect_claude_user_prompt|uninstall_claude_user_prompt"
   "claude_notification|Claude Code Notification hook|on|configure_claude_notification_hook|detect_claude_notification|uninstall_claude_notification"
+  "cline_task_start|Cline TaskStart hook|on|configure_cline_task_start_hook|detect_cline_task_start|uninstall_cline_task_start"
+  "cline_task_resume|Cline TaskResume hook|on|configure_cline_task_resume_hook|detect_cline_task_resume|uninstall_cline_task_resume"
+  "cline_task_complete|Cline TaskComplete hook|on|configure_cline_task_complete_hook|detect_cline_task_complete|uninstall_cline_task_complete"
+  "cline_task_cancel|Cline TaskCancel hook|on|configure_cline_task_cancel_hook|detect_cline_task_cancel|uninstall_cline_task_cancel"
+  "cline_task_error|Cline TaskError hook|on|configure_cline_task_error_hook|detect_cline_task_error|uninstall_cline_task_error"
+  "cline_user_prompt|Cline UserPromptSubmit hook|on|configure_cline_user_prompt_hook|detect_cline_user_prompt|uninstall_cline_user_prompt"
+  "cline_pre_tool_use|Cline PreToolUse (ask_question attention) hook|on|configure_cline_pre_tool_use_hook|detect_cline_pre_tool_use|uninstall_cline_pre_tool_use"
 )

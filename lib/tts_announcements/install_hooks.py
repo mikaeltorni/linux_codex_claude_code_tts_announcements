@@ -39,6 +39,8 @@ CODEX_LEGACY_BLOCK_RE = re.compile(
 )
 #: Matches a bare legacy ``notify = [...notify_agent.py]`` line left by old installs.
 LEGACY_NOTIFY_LINE_RE = re.compile(r'(?m)^notify = \["python3", ".*notify_agent\.py"\]\n+')
+#: Marker proving an event-named Cline hook is owned by this installer.
+CLINE_HOOK_MARKER = "TTS ANNOUNCEMENTS CLINE HOOK"
 
 
 @log.log_call(LOGGER)
@@ -273,6 +275,80 @@ def configure_claude_hooks(
 
 
 @log.log_call(LOGGER)
+def configure_cline_hook(hook_file: Path, command: str, filter_tool: str = "") -> None:
+    """Write one executable Cline lifecycle hook without clobbering user code.
+
+    When ``filter_tool`` is set, the generated hook reads stdin once and only
+    invokes the notify command when the payload contains that tool name. This
+    keeps ``PreToolUse`` (which fires for every tool call) cheap and silent for
+    routine tools, spawning the Python notifier only for attention tools such as
+    ``ask_question``.
+
+    Args:
+        hook_file: Canonical extensionless global hook path, such as
+            ``~/.cline/hooks/TaskStart``.
+        command: Notify command that consumes Cline's JSON payload from stdin.
+        filter_tool: Optional tool name that gates the notify command. When
+            non-empty the hook body guards on a substring match so unrelated
+            tool calls skip the notifier entirely.
+
+    Raises:
+        RuntimeError: If an existing file is not managed by this installer.
+    """
+    if hook_file.exists():
+        existing = hook_file.read_text(encoding="utf-8")
+        if CLINE_HOOK_MARKER not in existing:
+            raise RuntimeError(f"refusing to replace unmanaged Cline hook: {hook_file}")
+    if filter_tool:
+        body = f"""#!/usr/bin/env bash
+# {CLINE_HOOK_MARKER} (generated)
+# Receives one Cline hook JSON object on stdin and must emit JSON on stdout.
+# PreToolUse fires for every tool call; only invoke the notifier for the
+# attention tool so routine tool execution stays cheap and silent.
+export CODEX_AGENT_KIND=cline
+export CODEX_AGENT_LABEL=cline
+export CODEX_HOME="${{CODEX_HOME:-$HOME/.cline}}"
+input=$(cat)
+case "$input" in
+  *{filter_tool}*) printf '%s' "$input" | {command} >/dev/null || true ;;
+esac
+printf '%s\\n' '{{"cancel":false,"contextModification":"","errorMessage":""}}'
+"""
+    else:
+        body = f"""#!/usr/bin/env bash
+# {CLINE_HOOK_MARKER} (generated)
+# Receives one Cline hook JSON object on stdin and must emit JSON on stdout.
+export CODEX_AGENT_KIND=cline
+export CODEX_AGENT_LABEL=cline
+export CODEX_HOME="${{CODEX_HOME:-$HOME/.cline}}"
+{command} >/dev/null || true
+printf '%s\\n' '{{"cancel":false,"contextModification":"","errorMessage":""}}'
+"""
+    hook_file.parent.mkdir(parents=True, exist_ok=True)
+    hook_file.write_text(body, encoding="utf-8")
+    hook_file.chmod(0o755)
+    log.info(f"wrote Cline hook to {hook_file}", component=LOG_COMPONENT)
+
+
+@log.log_call(LOGGER)
+def remove_cline_hook(hook_file: Path) -> None:
+    """Remove one installer-managed Cline hook and preserve any other file.
+
+    Args:
+        hook_file: Event-named Cline hook path to inspect and possibly remove.
+    """
+    try:
+        existing = hook_file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return
+    if CLINE_HOOK_MARKER not in existing:
+        log.warn(f"preserving unmanaged Cline hook {hook_file}", component=LOG_COMPONENT)
+        return
+    hook_file.unlink()
+    log.info(f"removed Cline hook from {hook_file}", component=LOG_COMPONENT)
+
+
+@log.log_call(LOGGER)
 def remove_codex_notify(config_file: Path) -> None:
     """Strip the generated Codex notify block, leaving unrelated TOML intact.
 
@@ -403,6 +479,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Lifecycle events to register; defaults to the full set when omitted.",
     )
 
+    cline = subcommands.add_parser("cline")
+    cline.add_argument("hook_file", type=Path)
+    cline.add_argument("command")
+    cline.add_argument(
+        "--filter-tool",
+        default="",
+        help="Tool name that gates the notify command (PreToolUse attention hook).",
+    )
+
     # Symmetric removal subcommands (used by the component uninstall path).
     rm_codex = subcommands.add_parser("remove-codex")
     rm_codex.add_argument("config_file", type=Path)
@@ -414,6 +499,9 @@ def build_parser() -> argparse.ArgumentParser:
     rm_claude.add_argument("settings_file", type=Path)
     rm_claude.add_argument("command")
     rm_claude.add_argument("events", nargs="*")
+
+    rm_cline = subcommands.add_parser("remove-cline")
+    rm_cline.add_argument("hook_file", type=Path)
 
     return parser
 
@@ -435,12 +523,16 @@ def main(argv: list[str] | None = None) -> int:
         configure_codex_hooks(args.hooks_file, args.command)
     elif args.command_name == "claude":
         configure_claude_hooks(args.settings_file, args.command, args.events)
+    elif args.command_name == "cline":
+        configure_cline_hook(args.hook_file, args.command, args.filter_tool)
     elif args.command_name == "remove-codex":
         remove_codex_notify(args.config_file)
     elif args.command_name == "remove-codex-hooks":
         remove_codex_hooks(args.hooks_file)
     elif args.command_name == "remove-claude":
         remove_claude_hooks(args.settings_file, args.command, args.events)
+    elif args.command_name == "remove-cline":
+        remove_cline_hook(args.hook_file)
     return 0
 
 

@@ -129,6 +129,32 @@ configure_claude_subagent_stop_hook() { configure_claude_event_hook SubagentStop
 configure_claude_user_prompt_hook()   { configure_claude_event_hook UserPromptSubmit; }
 configure_claude_notification_hook()  { configure_claude_event_hook Notification; }
 
+# Register one Cline lifecycle event as an executable global hook. Cline's
+# documented Linux hook contract uses extensionless event-named files under
+# ~/.cline/hooks and exchanges JSON over stdin/stdout.
+configure_cline_event_hook() {
+  local event="$1" filter_tool="${2:-}" home hooks_dir hook_file command
+  home="$(tts_target_home)"
+  hooks_dir="${CLINE_HOOKS_DIR:-$home/.cline/hooks}"
+  hook_file="$hooks_dir/$event"
+  command="$(tts_hook_command)"
+  ensure_tts_core
+  mkdir -p "$hooks_dir"
+  local py_args=(cline "$hook_file" "$command")
+  [ -n "$filter_tool" ] && py_args+=(--filter-tool "$filter_tool")
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+    "${py_args[@]}"
+  tts_msg "Configured Cline $event hook in $hook_file"
+}
+
+configure_cline_task_start_hook()   { configure_cline_event_hook TaskStart; }
+configure_cline_task_resume_hook()  { configure_cline_event_hook TaskResume; }
+configure_cline_task_complete_hook(){ configure_cline_event_hook TaskComplete; }
+configure_cline_task_cancel_hook()  { configure_cline_event_hook TaskCancel; }
+configure_cline_task_error_hook()   { configure_cline_event_hook TaskError; }
+configure_cline_user_prompt_hook()  { configure_cline_event_hook UserPromptSubmit; }
+configure_cline_pre_tool_use_hook() { configure_cline_event_hook PreToolUse ask_question; }
+
 ###############################################################################
 # Detection and uninstall (component lifecycle)
 ###############################################################################
@@ -175,6 +201,21 @@ detect_claude_subagent_stop() { _tts_claude_has_event SubagentStop; }
 detect_claude_user_prompt()   { _tts_claude_has_event UserPromptSubmit; }
 detect_claude_notification()  { _tts_claude_has_event Notification; }
 
+_tts_cline_has_event() {
+  local event="$1" home hooks_dir file
+  home="$(tts_target_home)"
+  hooks_dir="${CLINE_HOOKS_DIR:-$home/.cline/hooks}"
+  file="$hooks_dir/$event"
+  [ -x "$file" ] && grep -q 'TTS ANNOUNCEMENTS CLINE HOOK' "$file" 2>/dev/null
+}
+detect_cline_task_start()    { _tts_cline_has_event TaskStart; }
+detect_cline_task_resume()   { _tts_cline_has_event TaskResume; }
+detect_cline_task_complete() { _tts_cline_has_event TaskComplete; }
+detect_cline_task_cancel()   { _tts_cline_has_event TaskCancel; }
+detect_cline_task_error()    { _tts_cline_has_event TaskError; }
+detect_cline_user_prompt()   { _tts_cline_has_event UserPromptSubmit; }
+detect_cline_pre_tool_use()  { _tts_cline_has_event PreToolUse; }
+
 uninstall_engine() {
   tts_msg "Removing agent-tts engine"
   rm -f "$(tts_bin_dir)/agent-tts"
@@ -205,3 +246,19 @@ uninstall_claude_stop()          { _tts_remove_claude_event Stop; }
 uninstall_claude_subagent_stop() { _tts_remove_claude_event SubagentStop; }
 uninstall_claude_user_prompt()   { _tts_remove_claude_event UserPromptSubmit; }
 uninstall_claude_notification()  { _tts_remove_claude_event Notification; }
+
+_tts_remove_cline_event() {
+  local event="$1" home hooks_dir file
+  home="$(tts_target_home)"
+  hooks_dir="${CLINE_HOOKS_DIR:-$home/.cline/hooks}"
+  file="$hooks_dir/$event"
+  tts_msg "Removing Cline $event notify hook from $file"
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks remove-cline "$file"
+}
+uninstall_cline_task_start()    { _tts_remove_cline_event TaskStart; }
+uninstall_cline_task_resume()   { _tts_remove_cline_event TaskResume; }
+uninstall_cline_task_complete() { _tts_remove_cline_event TaskComplete; }
+uninstall_cline_task_cancel()   { _tts_remove_cline_event TaskCancel; }
+uninstall_cline_task_error()    { _tts_remove_cline_event TaskError; }
+uninstall_cline_user_prompt()   { _tts_remove_cline_event UserPromptSubmit; }
+uninstall_cline_pre_tool_use()  { _tts_remove_cline_event PreToolUse; }

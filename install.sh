@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install.sh - user-level TTS announcement hook installer.
 #
-# Installs a shared notify hook for Codex and Claude Code without replacing
+# Installs shared notify hooks for Codex, Claude Code, and Cline without replacing
 # either runtime's executable. Generated config blocks are idempotent and
 # unrelated user settings are preserved.
 

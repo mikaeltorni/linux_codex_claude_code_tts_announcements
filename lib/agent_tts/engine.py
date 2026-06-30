@@ -20,6 +20,8 @@ names are still honored as fallbacks so existing installs keep working:
   * ``ATTS_CLAUDE_VOICE``     (was ``CLAUDE_TTS_VOICE`` /
                                 ``CLAUDE_CODE_TTS_VOICE``)
   * ``ATTS_QWEN_VOICE``       (was ``QWEN_CODEX_TTS_VOICE``)
+  * ``ATTS_CLINE_VOICE``      (was ``CLINE_TTS_VOICE``)
+  * ``ATTS_MODEL_DIR``        shared Kokoro model/voices directory override
   * ``ATTS_ANNOUNCE_WORKSPACE`` (was ``AGENT_COMMAND_CENTER_ANNOUNCE_WORKSPACE``)
   * ``ATTS_NO_AUDIO``         (was ``CODEX_AGENT_TRACKER_NO_AUDIO``)
   * ``ATTS_STATE_DIR``        (was ``CODEX_AGENT_TRACKER_STATE_DIR``)
@@ -182,6 +184,7 @@ def voice_label(agent_display: str = "", label: str = "", kind: str = "") -> str
         "qwen": "Local",
         "api": "API",
         "claude": "claude",
+        "cline": "cline",
     }
     if kind in canonical:
         return canonical[kind]
@@ -204,6 +207,8 @@ def codex_home_for_kind(kind: str, env: dict[str, str]) -> str:
         return str(Path.home() / ".codex-qwen")
     if kind == "api":
         return str(Path.home() / ".codex-api")
+    if kind == "cline":
+        return str(Path.home() / ".cline")
     return str(Path.home() / ".codex")
 
 
@@ -599,6 +604,43 @@ def fallback_speak(text: str, ignore_silent: bool = False) -> None:
     LOGGER.info("fallback_speak skipped: no fallback synthesizer found")
 
 
+def resolve_tts_dir(codex_home: Path) -> Path:
+    """Return the first directory containing the shared Kokoro assets.
+
+    Cline and Claude keep configuration in ``~/.cline``/``~/.claude`` but do
+    not own duplicate model files. They therefore reuse the canonical Codex TTS
+    assets after checking their own home and ``ATTS_MODEL_DIR``.
+
+    Args:
+        codex_home: Runtime-specific home passed by the notify hook.
+
+    Returns:
+        The first directory containing both required assets, or the runtime's
+        ``tts`` directory so the caller can log a deterministic missing path.
+    """
+    explicit = _first_env("ATTS_MODEL_DIR")
+    candidates = []
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
+    candidates.extend(
+        [
+            codex_home / "tts",
+            Path.home() / ".codex" / "tts",
+            Path.home() / ".codex-qwen" / "tts",
+        ]
+    )
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if (candidate / "kokoro-v1.0.onnx").is_file() and (
+            candidate / "voices-v1.0.bin"
+        ).is_file():
+            return candidate
+    return codex_home / "tts"
+
+
 def speak_with_kokoro(
     text: str,
     voice: str,
@@ -617,7 +659,7 @@ def speak_with_kokoro(
         LOGGER.info(f"kokoro skipped text={bool(text)} voice={voice!r} uvx={bool(uvx)}")
         return False
 
-    tts_dir = codex_home / "tts"
+    tts_dir = resolve_tts_dir(codex_home)
     if not (tts_dir / "kokoro-v1.0.onnx").is_file() or not (tts_dir / "voices-v1.0.bin").is_file():
         LOGGER.info(f"kokoro missing files in {tts_dir}")
         return False
