@@ -289,3 +289,83 @@ def test_context_normalized_wrapper_voice_is_runtime_fallback(monkeypatch):
     monkeypatch.setenv("CODEX__TTS_VOICE", "af_wrapper")
 
     assert notify.context_for({}, "codex").voice == "af_wrapper"
+
+
+def test_cline_pre_tool_use_ask_question_routes_clarify(monkeypatch):
+    """PreToolUse for the ask_question tool speaks an attention prompt."""
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+
+    assert (
+        notify.handle_cline(
+            {
+                "hookName": "tool_call",
+                "workspaceRoots": ["/repo/demo"],
+                "tool_call": {
+                    "id": "call_1",
+                    "name": "ask_question",
+                    "input": {"question": "Which framework?", "options": ["a", "b"]},
+                },
+            }
+        )
+        == 0
+    )
+    assert calls, "ask_question should route to the tracker"
+    assert calls[-1][:1] == ["clarify"]
+    assert "Which framework?" in calls[-1]
+
+
+def test_cline_pre_tool_use_file_hook_name_routes_clarify(monkeypatch):
+    """The PreToolUse file-hook name is accepted alongside the tool_call event."""
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+
+    assert (
+        notify.handle_cline(
+            {
+                "hookName": "PreToolUse",
+                "workspaceRoots": ["/repo/demo"],
+                "tool_call": {"name": "ask_question", "input": {"question": "pick one"}},
+            }
+        )
+        == 0
+    )
+    assert calls[-1][:1] == ["clarify"]
+    assert "pick one" in calls[-1]
+
+
+def test_cline_pre_tool_use_other_tool_is_silent(monkeypatch):
+    """PreToolUse for routine tools must not invoke the tracker."""
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+
+    assert (
+        notify.handle_cline(
+            {
+                "hookName": "tool_call",
+                "workspaceRoots": ["/repo/demo"],
+                "tool_call": {"name": "read_files", "input": {}},
+            }
+        )
+        == 0
+    )
+    assert calls == []
+
+
+def test_cline_pre_tool_use_ask_question_without_question_uses_default(monkeypatch):
+    """An ask_question call with no question text falls back to the attention label."""
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+
+    assert (
+        notify.handle_cline(
+            {
+                "hookName": "tool_call",
+                "workspaceRoots": ["/repo/demo"],
+                "tool_call": {"name": "ask_question", "input": {}},
+            }
+        )
+        == 0
+    )
+    assert calls[-1][:1] == ["clarify"]
+    assert "Cline needs your attention" in calls[-1]
