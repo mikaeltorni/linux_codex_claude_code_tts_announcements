@@ -133,3 +133,152 @@ def test_install_hook_shell_delegates_config_mutation_to_python_module():
 
     assert "tts_announcements.install_hooks" in helper
     assert "python3 - <<'PY'" not in helper
+
+
+def test_cline_hook_components_install_executable_global_hooks(tmp_path):
+    """Cline lifecycle components should use its documented global hook path."""
+    home = tmp_path / "home"
+    home.mkdir()
+    result = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "install.sh"),
+            "--select",
+            "cline_task_start,cline_task_resume,cline_task_complete,cline_task_cancel,cline_task_error,cline_user_prompt",
+        ],
+        cwd=ROOT,
+        env={
+            "HOME": str(home),
+            "TTS_TARGET_HOME": str(home),
+            "TTS_LOG_DIR": str(tmp_path / "install-log"),
+            "PATH": "/usr/bin:/bin",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    hooks = home / ".cline/hooks"
+    for event in (
+        "TaskStart",
+        "TaskResume",
+        "TaskComplete",
+        "TaskCancel",
+        "TaskError",
+        "UserPromptSubmit",
+    ):
+        hook = hooks / event
+        assert hook.is_file()
+        assert hook.stat().st_mode & 0o111
+        body = hook.read_text(encoding="utf-8")
+        assert "TTS ANNOUNCEMENTS CLINE HOOK" in body
+        assert "notify_agent.py" in body
+        assert "CODEX_AGENT_KIND=cline" in body
+        assert '{"cancel":false' in body
+
+    hook_result = subprocess.run(
+        [str(hooks / "TaskStart")],
+        input=json.dumps(
+            {
+                "hookName": "agent_start",
+                "workspaceRoots": ["/repo/demo"],
+                "taskStart": {"task": "test hooks"},
+            }
+        ),
+        env={
+            "HOME": str(home),
+            "PATH": f"{home / '.local/bin'}:/usr/bin:/bin",
+            "ATTS_NO_AUDIO": "1",
+            "ATTS_LOG_DIR": str(tmp_path / "runtime-log"),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert hook_result.returncode == 0, hook_result.stderr
+    assert json.loads(hook_result.stdout) == {
+        "cancel": False,
+        "contextModification": "",
+        "errorMessage": "",
+    }
+
+
+def test_cline_hook_writer_refuses_to_clobber_user_hook(tmp_path):
+    """An unmanaged hook at the canonical event path must be preserved."""
+    hook = tmp_path / "TaskStart"
+    hook.write_text("#!/bin/sh\necho user-hook\n", encoding="utf-8")
+    result = subprocess.run(
+        [
+            "python3",
+            "-m",
+            "tts_announcements.install_hooks",
+            "cline",
+            str(hook),
+            "python3 /managed/notify_agent.py",
+        ],
+        cwd=ROOT,
+        env={"PYTHONPATH": str(ROOT / "lib"), "PATH": "/usr/bin:/bin"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert hook.read_text(encoding="utf-8") == "#!/bin/sh\necho user-hook\n"
+
+
+def test_cline_pre_tool_use_hook_gates_notifier_on_ask_question(tmp_path):
+    """The PreToolUse hook only invokes the notifier for the ask_question tool."""
+    home = tmp_path / "home"
+    home.mkdir()
+    result = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "install.sh"),
+            "--select",
+            "cline_pre_tool_use",
+        ],
+        cwd=ROOT,
+        env={
+            "HOME": str(home),
+            "TTS_TARGET_HOME": str(home),
+            "TTS_LOG_DIR": str(tmp_path / "install-log"),
+            "PATH": "/usr/bin:/bin",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    hook = home / ".cline/hooks/PreToolUse"
+    assert hook.is_file()
+    assert hook.stat().st_mode & 0o111
+    body = hook.read_text(encoding="utf-8")
+    assert "TTS ANNOUNCEMENTS CLINE HOOK" in body
+    assert "notify_agent.py" in body
+    assert "CODEX_AGENT_KIND=cline" in body
+    # The bash guard gates the notifier on the ask_question tool name.
+    assert "ask_question" in body
+    assert "case" in body
+    assert '{"cancel":false' in body
+
+    # A routine tool call must still emit the Cline control JSON without
+    # invoking the notifier (the guard skips it).
+    routine = subprocess.run(
+        [str(hook)],
+        input=json.dumps(
+            {"hookName": "tool_call", "tool_call": {"name": "read_files", "input": {}}}
+        ),
+        env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert routine.returncode == 0, routine.stderr
+    assert json.loads(routine.stdout) == {
+        "cancel": False,
+        "contextModification": "",
+        "errorMessage": "",
+    }

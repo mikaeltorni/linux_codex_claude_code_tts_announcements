@@ -37,6 +37,70 @@ def test_claude_stop_routes_finish_announcement(monkeypatch, tmp_path):
     assert calls[0][-2:] == ["--task-description", "ship hooks"]
 
 
+def test_cline_documented_and_cli_payloads_route_all_tts_events(monkeypatch):
+    """Cline hooks support both public names and 3.x internal event names."""
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+
+    assert notify.handle_cline(
+        {
+            "hookName": "agent_start",
+            "workspaceRoots": ["/repo/demo"],
+            "taskStart": {"task": "build it"},
+        }
+    ) == 0
+    assert calls[-1][:3] == ["announce", "--event", "start"]
+
+    assert notify.handle_cline(
+        {
+            "hookName": "UserPromptSubmit",
+            "workspaceRoots": ["/repo/demo"],
+            "userPromptSubmit": {"prompt": "ship it"},
+        }
+    ) == 0
+    assert calls[-1][:2] == ["title", "--prompt"]
+    assert calls[-1][2] == "ship it"
+
+    assert notify.handle_cline(
+        {
+            "hookName": "agent_end",
+            "workspaceRoots": ["/repo/demo"],
+            "taskComplete": {"task": "ship it"},
+        }
+    ) == 0
+    assert calls[-1][:3] == ["announce", "--event", "finish"]
+    assert calls[-1][-2:] == ["--task-description", "ship it"]
+
+    assert notify.handle_cline(
+        {
+            "hookName": "agent_error",
+            "workspaceRoots": ["/repo/demo"],
+            "taskError": {"task": "ship it"},
+        }
+    ) == 0
+    assert calls[-1][:3] == ["announce", "--event", "finish"]
+    assert calls[-1][-2:] == ["--task-description", "ship it"]
+
+
+def test_cline_context_uses_cline_home_voice_and_workspace_roots(monkeypatch):
+    """Cline hook context should not inherit Codex or Claude defaults."""
+    monkeypatch.setenv("CODEX_AGENT_KIND", "cline")
+    monkeypatch.setenv("CLINE_TTS_VOICE", "af_cline")
+    monkeypatch.delenv("CODEX_AGENT_LABEL", raising=False)
+    monkeypatch.delenv("CODEX_AGENT_PROJECT_PATH", raising=False)
+    monkeypatch.delenv("CODEX_AGENT_PROJECT_NAME", raising=False)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.delenv("CODEX__TTS_VOICE", raising=False)
+
+    context = notify.context_for({"workspaceRoots": ["/repo/demo"]}, "cline")
+
+    assert context.label == "cline"
+    assert context.project_name == "demo"
+    assert context.project_path == "/repo/demo"
+    assert context.voice == "af_cline"
+    assert context.codex_home == Path.home() / ".cline"
+
+
 def test_session_start_startup_announces(monkeypatch):
     calls = []
     monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
