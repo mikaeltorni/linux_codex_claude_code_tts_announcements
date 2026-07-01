@@ -23,9 +23,10 @@ This repository has two layers with different dependencies:
   `CODEX_AGENT_TRACKER_NO_AUDIO`) are still honored as fallbacks.
 - **The notify hooks delegate orchestration to `codex-agent-tracker`** (Agent
   Command Center) for start/finish/attention announcements, so that the spoken
-  finish label is summarized once and shared with the terminal title. When the
-  tracker is absent the hooks simply do nothing; nothing here *requires* ACC to
-  build or install.
+  finish label is summarized once and shared with the terminal title. Claude
+  hooks forward the runtime session id so concurrent sessions in one project
+  cannot reuse each other's title/finish labels. When the tracker is absent the
+  hooks simply do nothing; nothing here *requires* ACC to build or install.
 - **Build-time (soft):** the shared installer component framework
   [`linux_installation_scripts_functions`](https://github.com/mikaeltorni/linux_installation_scripts_functions) —
   loaded from a sibling checkout when present, otherwise downloaded on demand.

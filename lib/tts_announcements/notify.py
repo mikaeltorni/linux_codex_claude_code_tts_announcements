@@ -281,7 +281,12 @@ def context_for(payload: dict[str, Any], default_label: str) -> RuntimeContext:
     )
 
 
-def announce(event: str, context: RuntimeContext, task_description: str = "") -> bool:
+def announce(
+    event: str,
+    context: RuntimeContext,
+    task_description: str = "",
+    feature_key: str = "",
+) -> bool:
     """Ask the tracker to speak a start or finish announcement.
 
     Args:
@@ -289,6 +294,8 @@ def announce(event: str, context: RuntimeContext, task_description: str = "") ->
         context: Resolved runtime context supplying label, project, and voice.
         task_description: Optional task summary spoken on finish; omitted when
             empty.
+        feature_key: Stable runtime session id used to isolate the title/finish
+            label cache from concurrent sessions in the same project.
 
     Returns:
         bool: ``True`` when the tracker reported success, ``False`` otherwise.
@@ -310,6 +317,8 @@ def announce(event: str, context: RuntimeContext, task_description: str = "") ->
     ]
     if context.model_name:
         args.extend(["--model-name", context.model_name])
+    if feature_key:
+        args.extend(["--feature-key", feature_key])
     if task_description:
         args.extend(["--task-description", task_description])
     return run_tracker(args)
@@ -343,12 +352,14 @@ def clarify(context: RuntimeContext, question: str) -> bool:
     )
 
 
-def update_title(prompt: str, context: RuntimeContext) -> bool:
+def update_title(prompt: str, context: RuntimeContext, feature_key: str = "") -> bool:
     """Ask the tracker to update the terminal title for a submitted prompt.
 
     Args:
         prompt: The submitted user prompt; whitespace is normalized before use.
         context: Resolved runtime context supplying the project path and home.
+        feature_key: Stable runtime session id used to isolate this title label
+            from concurrent sessions in the same project.
 
     Returns:
         bool: ``True`` when the tracker reported success, ``False`` otherwise.
@@ -364,6 +375,8 @@ def update_title(prompt: str, context: RuntimeContext) -> bool:
     ]
     kitty_window_id = os.environ.get("KITTY_WINDOW_ID", "")
     terminal_device = os.environ.get("CODEX_AGENT_TERMINAL_DEVICE", "")
+    if feature_key:
+        args.extend(["--feature-key", feature_key])
     if kitty_window_id:
         args.extend(["--kitty-window-id", kitty_window_id])
     if terminal_device:
@@ -473,8 +486,10 @@ def handle_claude(payload: dict[str, Any]) -> int:
     """
     event = payload.get("hook_event_name", "")
     context = context_for(payload, "claude")
+    feature_key = normalize_text(str(payload.get("session_id", "")))
     log.info(
-        f"Claude event={event} project={context.project_name} cwd={payload.get('cwd')}",
+        f"Claude event={event} project={context.project_name} "
+        f"session_scoped={bool(feature_key)} cwd={payload.get('cwd')}",
         component=LOG_COMPONENT,
     )
 
@@ -485,14 +500,14 @@ def handle_claude(payload: dict[str, Any]) -> int:
         # compaction), so only a true startup is announced.
         source = str(payload.get("source", "startup"))
         if source == "startup":
-            announce("start", context)
+            announce("start", context, feature_key=feature_key)
         else:
             log.debug(f"skip start announce for source={source}", component=LOG_COMPONENT)
     elif event in {"Stop", "SubagentStop"}:
         task = transcript_prompt(str(payload.get("transcript_path", "")))
-        announce("finish", context, task_description=task)
+        announce("finish", context, task_description=task, feature_key=feature_key)
     elif event == "UserPromptSubmit":
-        update_title(str(payload.get("prompt", "")), context)
+        update_title(str(payload.get("prompt", "")), context, feature_key=feature_key)
     elif event in {"Notification", "PermissionRequest"}:
         raw_message = normalize_text(str(payload.get("message", "")))
         # Claude fires a Notification both for genuine attention (permission

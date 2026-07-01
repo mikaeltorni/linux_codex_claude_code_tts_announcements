@@ -31,10 +31,42 @@ def test_claude_stop_routes_finish_announcement(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
 
-    assert notify.handle_claude({"hook_event_name": "Stop", "cwd": "/repo/demo", "transcript_path": str(transcript)}) == 0
+    assert notify.handle_claude(
+        {
+            "hook_event_name": "Stop",
+            "session_id": "claude-session-1",
+            "cwd": "/repo/demo",
+            "transcript_path": str(transcript),
+        }
+    ) == 0
     assert calls[0][:2] == ["announce", "--event"]
     assert "finish" in calls[0]
+    assert calls[0][calls[0].index("--feature-key") + 1] == "claude-session-1"
     assert calls[0][-2:] == ["--task-description", "ship hooks"]
+
+
+def test_claude_prompt_and_stop_forward_the_same_session_feature_key(monkeypatch, tmp_path):
+    """Concurrent Claude sessions in one project must not share title labels."""
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "remove dock favourites"}}),
+        encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+
+    common = {
+        "session_id": "claude-dock-session",
+        "cwd": "/repo/demo",
+        "transcript_path": str(transcript),
+    }
+    assert notify.handle_claude(
+        {**common, "hook_event_name": "UserPromptSubmit", "prompt": "remove dock favourites"}
+    ) == 0
+    assert notify.handle_claude({**common, "hook_event_name": "Stop"}) == 0
+
+    for args in calls:
+        assert args[args.index("--feature-key") + 1] == "claude-dock-session"
 
 
 def test_cline_documented_and_cli_payloads_route_all_tts_events(monkeypatch):
