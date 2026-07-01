@@ -62,6 +62,23 @@ def test_installer_writes_config_hooks_without_replacing_binaries(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
+    second_result = subprocess.run(
+        ["bash", str(ROOT / "install.sh")],
+        cwd=ROOT,
+        env={
+            "HOME": str(home),
+            "TTS_TARGET_HOME": str(home),
+            "TTS_LOG_DIR": str(tmp_path / "install-log"),
+            "CODEX_CONFIG_FILE": str(codex_config),
+            "CODEX_HOOKS_FILE": str(codex_hooks),
+            "CLAUDE_SETTINGS_FILE": str(claude_settings),
+            "PATH": "/usr/bin:/bin",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert second_result.returncode == 0, second_result.stderr
     install_log = tmp_path / "install-log/install.log"
     assert "Installing Codex/Claude Code TTS announcement hooks" in install_log.read_text(encoding="utf-8")
     install_root = home / ".local/share/codex-claude-tts-announcements"
@@ -85,7 +102,12 @@ def test_installer_writes_config_hooks_without_replacing_binaries(tmp_path):
     settings = json.loads(claude_settings.read_text(encoding="utf-8"))
     stop_commands = [hook["command"] for entry in settings["hooks"]["Stop"] for hook in entry["hooks"]]
     assert "echo keep" in stop_commands
-    assert any("codex-claude-tts-announcements/scripts/notify_agent.py" in command for command in stop_commands)
+    managed_stop_commands = [
+        command
+        for command in stop_commands
+        if "codex-claude-tts-announcements/scripts/notify_agent.py" in command
+    ]
+    assert len(managed_stop_commands) == 1
     assert "/old/notify_agent.py" not in stop_commands
 
 
