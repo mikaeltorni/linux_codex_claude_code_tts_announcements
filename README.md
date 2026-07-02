@@ -1,6 +1,6 @@
 # Linux Codex/Claude Code TTS Announcements
 
-> Part of [installation_scripts](https://github.com/mikaeltorni/installation_scripts) — the standalone **`agent-tts`** text-to-speech engine and notify hooks for **Codex**, **Claude Code**, **Cline**, and **Qwen** agents. Tested on Ubuntu 24.04.4 LTS; the Python engine is largely portable but the audio playback backend is currently Linux-specific (Windows/macOS untested).
+> Part of [installation_scripts](https://github.com/mikaeltorni/installation_scripts) — the standalone **`agent-tts`** text-to-speech engine and notify hooks for **Codex**, **Claude Code**, **Cline**, **Grok**, and **Qwen** agents. Tested on Ubuntu 24.04.4 LTS; the Python engine is largely portable but the audio playback backend is currently Linux-specific (Windows/macOS untested).
 
 The agent text-to-speech home for Codex, Claude Code, and Qwen on Linux. This
 repository ships two things:
@@ -8,7 +8,7 @@ repository ships two things:
 1. **`agent-tts`** — the standalone speech engine that owns *all* agent TTS:
    Kokoro synthesis, ffmpeg volume amplification, playback, voice selection, the
    speed/volume/silent tunables, and the spoken start/finish/clarify wording.
-2. **Notify hooks** — Codex, Claude Code, and Cline hooks that turn agent lifecycle
+2. **Notify hooks** — Codex, Claude Code, Cline, and Grok hooks that turn agent lifecycle
    events into spoken start/finish/attention/danger announcements.
 
 ## Repository dependencies
@@ -32,8 +32,8 @@ This repository has two layers with different dependencies:
   loaded from a sibling checkout when present, otherwise downloaded on demand.
 
 Agent Command Center delegates all speech to this repository's `agent-tts`
-engine, so in the desktop setup chain ACC installs this repository through its
-recommended (default-on) `tts_announcements` component.
+engine. The desktop setup chain installs this repository directly, so its own
+submenu controls the engine, voice categories, and hooks before ACC starts.
 
 See the full cross-repository map in
 [installation_scripts/DEPENDENCIES.md](https://github.com/mikaeltorni/installation_scripts/blob/master/DEPENDENCIES.md).
@@ -147,7 +147,10 @@ user-authored hooks; reruns also remove the retired Agent Command Center
 
 ## Integration with Agent Command Center
 
-The Agent Command Center repository can clone and run this installer when `AGENT_COMMAND_CENTER_INSTALL_TTS_ANNOUNCEMENTS=1` is set. See `agent_command_center/scripts/install_standalone.sh` for integration details.
+The master `installation_scripts/install.sh` exposes this repository directly.
+For backward-compatible standalone ACC installs,
+`AGENT_COMMAND_CENTER_INSTALL_TTS_ANNOUNCEMENTS=1` still delegates to this
+installer.
 
 ## Detect, reconfigure, and uninstall
 
