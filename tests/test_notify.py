@@ -403,6 +403,8 @@ def test_cline_pre_tool_use_other_tool_is_silent(monkeypatch):
 def test_cline_pre_tool_use_ask_question_without_question_uses_default(monkeypatch):
     """An ask_question call with no question text falls back to the attention label."""
     calls = []
+    monkeypatch.delenv("CODEX_AGENT_LABEL", raising=False)
+    monkeypatch.delenv("CODEX_AGENT_KIND", raising=False)
     monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
 
     assert (
