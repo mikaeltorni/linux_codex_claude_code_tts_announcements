@@ -186,6 +186,8 @@ def test_grok_default_beats_stale_global_codex_tts_voice(engine, monkeypatch):
     """A shell-wide CODEX__TTS_VOICE must not override Grok's distinct default."""
     monkeypatch.setenv("CODEX__TTS_VOICE", "af_heart")
     assert engine.voice_for_kind("grok", {}) == "af_kore"
+    assert engine.voice_for_kind("grok", {"CODEX__TTS_VOICE": "af_heart"}) == "af_kore"
+    assert engine.voice_for_kind("qwen", {}) == "af_heart"
 
 
 def test_cline_and_claude_reuse_shared_codex_kokoro_assets(engine, monkeypatch, tmp_path):
