@@ -25,6 +25,10 @@ def cli(tmp_path, monkeypatch):
         "ATTS_SILENT",
         "ATTS_VOICE",
         "ATTS_ANNOUNCE_WORKSPACE",
+        "ATTS_ANNOUNCE_START",
+        "ATTS_ANNOUNCE_FINISH",
+        "ATTS_ANNOUNCE_ATTENTION",
+        "ATTS_EVENT_CONFIG_FILE",
         "ATTS_NO_AUDIO",
         "AGENT_COMMAND_CENTER_TTS_SPEED",
         "AGENT_COMMAND_CENTER_TTS_VOLUME_PERCENT",
@@ -113,6 +117,31 @@ def test_announce_composes_finish_wording(cli, monkeypatch):
         == 0
     )
     assert spoken["text"] == "shipped the feature"
+
+
+def test_lifecycle_and_attention_events_can_be_disabled(cli, monkeypatch, tmp_path):
+    """Installed settings independently suppress start, finish, and attention."""
+    config = tmp_path / "announcements.env"
+    config.write_text(
+        "ATTS_ANNOUNCE_START=0\n"
+        "ATTS_ANNOUNCE_FINISH=1\n"
+        "ATTS_ANNOUNCE_ATTENTION=0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ATTS_EVENT_CONFIG_FILE", str(config))
+    spoken = []
+    monkeypatch.setattr(
+        cli.engine,
+        "speak",
+        lambda text, voice, *args, **kwargs: spoken.append(text) or True,
+    )
+
+    assert cli.main(["announce", "--event", "start", "--voice", "af_sky"]) == 0
+    assert cli.main(["announce", "--event", "finish", "--voice", "af_sky"]) == 0
+    assert cli.main(["clarify", "--voice", "af_sky", "--project-name", "demo"]) == 0
+
+    assert len(spoken) == 1
+    assert spoken[0] == "Agent ended"
 
 
 def test_clarify_accepts_question_for_compat(cli, monkeypatch):

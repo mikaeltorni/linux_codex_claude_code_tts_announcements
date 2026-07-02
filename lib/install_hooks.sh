@@ -40,6 +40,56 @@ tts_bin_dir() {
   printf '%s\n' "${TTS_BIN_DIR:-$(tts_target_home)/.local/bin}"
 }
 
+# Resolve the persistent event-category settings consumed by agent-tts.
+tts_event_config_file() {
+  printf '%s\n' "${ATTS_EVENT_CONFIG_FILE:-$(tts_target_home)/.config/agent-tts/announcements.env}"
+}
+
+# Create an explicit all-off baseline. Event components enable only the
+# categories selected by the standalone or master installer.
+initialize_tts_event_settings() {
+  local file
+  file="$(tts_event_config_file)"
+  [ -f "$file" ] && return 0
+  mkdir -p "$(dirname "$file")"
+  printf '%s\n' \
+    'ATTS_ANNOUNCE_START=0' \
+    'ATTS_ANNOUNCE_FINISH=0' \
+    'ATTS_ANNOUNCE_ATTENTION=0' >"$file"
+  tts_log "Initialized event settings in $file"
+}
+
+# Read one event setting, defaulting off when the file/key is absent.
+tts_event_setting() {
+  local key="$1" file value
+  file="$(tts_event_config_file)"
+  value="$(sed -n "s/^${key}=//p" "$file" 2>/dev/null | tail -n 1)"
+  printf '%s\n' "${value:-0}"
+}
+
+# Persist one event setting while preserving the other two categories.
+tts_set_event_setting() {
+  local key="$1" value="$2" file start finish attention tmp
+  initialize_tts_event_settings
+  file="$(tts_event_config_file)"
+  start="$(tts_event_setting ATTS_ANNOUNCE_START)"
+  finish="$(tts_event_setting ATTS_ANNOUNCE_FINISH)"
+  attention="$(tts_event_setting ATTS_ANNOUNCE_ATTENTION)"
+  case "$key" in
+    ATTS_ANNOUNCE_START) start="$value" ;;
+    ATTS_ANNOUNCE_FINISH) finish="$value" ;;
+    ATTS_ANNOUNCE_ATTENTION) attention="$value" ;;
+    *) tts_msg "Unknown event setting: $key"; return 2 ;;
+  esac
+  tmp="${file}.tmp.$$"
+  printf '%s\n' \
+    "ATTS_ANNOUNCE_START=$start" \
+    "ATTS_ANNOUNCE_FINISH=$finish" \
+    "ATTS_ANNOUNCE_ATTENTION=$attention" >"$tmp"
+  mv "$tmp" "$file"
+  tts_msg "Set $key=$value in $file"
+}
+
 # Install the standalone Agent TTS (ATTS) speech engine and its `agent-tts`
 # launcher. The engine owns all speech (synthesis, playback, speed/volume/silent
 # tunables, voice selection, wording); runtimes such as agent_command_center
@@ -48,16 +98,26 @@ install_agent_tts_engine() {
   local root bin
   root="$(tts_install_root)"
   bin="$(tts_bin_dir)"
-  mkdir -p "$root/lib/agent_tts" "$root/scripts" "$bin"
+  mkdir -p "$root/lib/agent_tts" "$root/lib/tts_announcements" "$root/scripts" "$bin"
   install -m 0644 "$SCRIPT_DIR/lib/agent_tts/__init__.py" "$root/lib/agent_tts/__init__.py"
   install -m 0644 "$SCRIPT_DIR/lib/agent_tts/engine.py" "$root/lib/agent_tts/engine.py"
   install -m 0644 "$SCRIPT_DIR/lib/agent_tts/cli.py" "$root/lib/agent_tts/cli.py"
+  # agent_tts imports the repository's one centralized logging module even when
+  # no notify hooks were selected.
+  install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/__init__.py" "$root/lib/tts_announcements/__init__.py"
+  install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/logging_utils.py" "$root/lib/tts_announcements/logging_utils.py"
   install -m 0755 "$SCRIPT_DIR/scripts/agent-tts" "$root/scripts/agent-tts"
   # The entrypoint resolves its bundled package relative to its real path, so a
   # symlink in PATH keeps finding `$root/lib`.
   ln -sf "$root/scripts/agent-tts" "$bin/agent-tts"
+  initialize_tts_event_settings
   tts_msg "Installed agent-tts engine to $root and linked $bin/agent-tts"
 }
+
+# Enable independently selectable spoken event categories.
+install_start_voice()     { install_agent_tts_engine; tts_set_event_setting ATTS_ANNOUNCE_START 1; }
+install_finish_voice()    { install_agent_tts_engine; tts_set_event_setting ATTS_ANNOUNCE_FINISH 1; }
+install_attention_voice() { install_agent_tts_engine; tts_set_event_setting ATTS_ANNOUNCE_ATTENTION 1; }
 
 # Install the notify hook package and script without mutating any agent config.
 install_tts_hook_files() {
@@ -185,6 +245,9 @@ tts_config_has() {
 
 detect_engine()       { [ -e "$(tts_bin_dir)/agent-tts" ] || [ -f "$(tts_install_root)/scripts/agent-tts" ]; }
 detect_hook_files()   { [ -f "$(tts_install_root)/scripts/notify_agent.py" ]; }
+detect_start_voice()     { [ "$(tts_event_setting ATTS_ANNOUNCE_START)" = 1 ]; }
+detect_finish_voice()    { [ "$(tts_event_setting ATTS_ANNOUNCE_FINISH)" = 1 ]; }
+detect_attention_voice() { [ "$(tts_event_setting ATTS_ANNOUNCE_ATTENTION)" = 1 ]; }
 detect_codex_notify() { tts_config_has "${CODEX_CONFIG_FILE:-$(tts_target_home)/.codex/config.toml}"; }
 detect_grok_notify()  { tts_config_has "${GROK_CONFIG_FILE:-$(tts_target_home)/.grok/config.toml}"; }
 detect_codex_attention() {
@@ -237,9 +300,16 @@ uninstall_engine() {
   rm -f "$(tts_bin_dir)/agent-tts"
   rm -rf "$(tts_install_root)/lib/agent_tts" "$(tts_install_root)/scripts/agent-tts"
 }
+uninstall_start_voice()     { tts_set_event_setting ATTS_ANNOUNCE_START 0; }
+uninstall_finish_voice()    { tts_set_event_setting ATTS_ANNOUNCE_FINISH 0; }
+uninstall_attention_voice() { tts_set_event_setting ATTS_ANNOUNCE_ATTENTION 0; }
 uninstall_hook_files() {
   tts_msg "Removing TTS notify hook files"
-  rm -rf "$(tts_install_root)/lib/tts_announcements" "$(tts_install_root)/scripts/notify_agent.py"
+  # Keep __init__.py + logging_utils.py: agent-tts imports the repository's
+  # centralized logger even when no runtime notify hooks are installed.
+  rm -f "$(tts_install_root)/lib/tts_announcements/install_hooks.py" \
+        "$(tts_install_root)/lib/tts_announcements/notify.py" \
+        "$(tts_install_root)/scripts/notify_agent.py"
 }
 uninstall_codex_notify() {
   local f="${CODEX_CONFIG_FILE:-$(tts_target_home)/.codex/config.toml}"

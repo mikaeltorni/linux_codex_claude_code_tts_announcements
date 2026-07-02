@@ -23,6 +23,10 @@ names are still honored as fallbacks so existing installs keep working:
   * ``ATTS_CLINE_VOICE``      (was ``CLINE_TTS_VOICE``)
   * ``ATTS_MODEL_DIR``        shared Kokoro model/voices directory override
   * ``ATTS_ANNOUNCE_WORKSPACE`` (was ``AGENT_COMMAND_CENTER_ANNOUNCE_WORKSPACE``)
+  * ``ATTS_ANNOUNCE_START``    enables/disables start announcements
+  * ``ATTS_ANNOUNCE_FINISH``   enables/disables end announcements
+  * ``ATTS_ANNOUNCE_ATTENTION`` enables/disables ask-for-input announcements
+  * ``ATTS_EVENT_CONFIG_FILE`` overrides the installed event-settings file
   * ``ATTS_NO_AUDIO``         (was ``CODEX_AGENT_TRACKER_NO_AUDIO``)
   * ``ATTS_STATE_DIR``        (was ``CODEX_AGENT_TRACKER_STATE_DIR``)
 
@@ -65,6 +69,7 @@ TTS_VOLUME_FILE = STATE_DIR / "tts-volume"
 LOGGER = logging_utils.get_logger("agent_tts", "voice.log")
 
 TRUTHY = {"1", "true", "yes", "y", "on", "shutdown", "poweroff"}
+FALSEY = {"0", "false", "no", "n", "off", "disabled"}
 DEFAULT_TTS_SPEED = 1.5
 DEFAULT_TTS_VOLUME_PERCENT = 1000.0
 LEGACY_DEFAULT_TTS_VOLUME_ENV = "125"
@@ -95,6 +100,58 @@ def _read_state_file(filename: str) -> str:
         if text:
             return text
     return ""
+
+
+def event_config_file() -> Path:
+    """Return the installer-managed lifecycle announcement settings file."""
+    configured = os.environ.get("ATTS_EVENT_CONFIG_FILE", "").strip()
+    return Path(configured).expanduser() if configured else Path.home() / ".config/agent-tts/announcements.env"
+
+
+def announcement_enabled(event: str) -> bool:
+    """Return whether one lifecycle/attention announcement category is enabled.
+
+    Environment variables take precedence over the installer-managed file.
+    Missing files/keys default on for compatibility with installations created
+    before per-event controls existed; the current installer creates an
+    explicit all-off file before enabling the selected components.
+
+    Args:
+        event: ``start``, ``finish``/``end``, or ``attention``/``clarify``.
+
+    Returns:
+        ``True`` when the category should speak.
+    """
+    normalized = event.strip().lower()
+    key = {
+        "start": "ATTS_ANNOUNCE_START",
+        "finish": "ATTS_ANNOUNCE_FINISH",
+        "end": "ATTS_ANNOUNCE_FINISH",
+        "attention": "ATTS_ANNOUNCE_ATTENTION",
+        "clarify": "ATTS_ANNOUNCE_ATTENTION",
+    }.get(normalized)
+    if not key:
+        return True
+    value = os.environ.get(key, "").strip()
+    if not value:
+        try:
+            for raw in event_config_file().read_text(encoding="utf-8").splitlines():
+                name, separator, candidate = raw.partition("=")
+                if separator and name.strip() == key:
+                    value = candidate.strip().strip('"').strip("'")
+                    break
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            LOGGER.error("event config read failed %s: %s", event_config_file(), exc)
+            return True
+    lowered = value.lower()
+    if lowered in FALSEY:
+        return False
+    if lowered in TRUTHY:
+        return True
+    LOGGER.warning("invalid %s value %r; keeping announcements enabled", key, value)
+    return True
 
 
 def project_folder_name(project_path: str = "") -> str:

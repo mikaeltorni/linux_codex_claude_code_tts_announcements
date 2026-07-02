@@ -150,6 +150,109 @@ def test_single_hook_component_installs_core_and_only_that_hook(tmp_path):
     assert not codex_config.exists()
 
 
+def test_lifecycle_voice_components_persist_independent_event_settings(tmp_path):
+    """The standalone installer exposes independent start/end/attention toggles."""
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {
+        "HOME": str(home),
+        "TTS_TARGET_HOME": str(home),
+        "TTS_LOG_DIR": str(tmp_path / "install-log"),
+        "PATH": "/usr/bin:/bin",
+    }
+
+    engine_only = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--select", "engine"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert engine_only.returncode == 0, engine_only.stderr
+    settings = home / ".config/agent-tts/announcements.env"
+    assert settings.read_text(encoding="utf-8").splitlines() == [
+        "ATTS_ANNOUNCE_START=0",
+        "ATTS_ANNOUNCE_FINISH=0",
+        "ATTS_ANNOUNCE_ATTENTION=0",
+    ]
+
+    selected = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "install.sh"),
+            "--select",
+            "start_voice,finish_voice,attention_voice",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert selected.returncode == 0, selected.stderr
+    assert settings.read_text(encoding="utf-8").splitlines() == [
+        "ATTS_ANNOUNCE_START=1",
+        "ATTS_ANNOUNCE_FINISH=1",
+        "ATTS_ANNOUNCE_ATTENTION=1",
+    ]
+
+    listing = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--list-components"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert listing.returncode == 0, listing.stderr
+    assert "start_voice\tStart voice announcements\ton" in listing.stdout
+    assert "finish_voice\tEnd voice announcements\ton" in listing.stdout
+    assert "attention_voice\tAsk-for-further-changes voice announcements\ton" in listing.stdout
+
+
+def test_uninstalling_hook_files_keeps_engine_logging_dependency(tmp_path):
+    """Removing notify hooks must leave a separately selected agent-tts usable."""
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {
+        "HOME": str(home),
+        "TTS_TARGET_HOME": str(home),
+        "TTS_LOG_DIR": str(tmp_path / "install-log"),
+        "ATTS_STATE_DIR": str(tmp_path / "state"),
+        "ATTS_LOG_DIR": str(tmp_path / "runtime-log"),
+        "PATH": "/usr/bin:/bin",
+    }
+    installed = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--select", "engine,hook_files"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert installed.returncode == 0, installed.stderr
+    removed = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--uninstall", "hook_files"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert removed.returncode == 0, removed.stderr
+
+    engine = subprocess.run(
+        [str(home / ".local/bin/agent-tts"), "speed", "status"],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert engine.returncode == 0, engine.stderr
+    assert engine.stdout.strip() == "1.5"
+
+
 def test_install_hook_shell_delegates_config_mutation_to_python_module():
     helper = (ROOT / "lib/install_hooks.sh").read_text(encoding="utf-8")
 

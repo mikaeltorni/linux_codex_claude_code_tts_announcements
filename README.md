@@ -76,6 +76,11 @@ Tunables (env overrides win over the persisted values):
   automatically reuse `~/.codex/tts` when their own config homes have no model
   assets, avoiding duplicate downloads and robotic fallback speech.
 - `ATTS_ANNOUNCE_WORKSPACE=0` — disable the spoken workspace suffix.
+- `ATTS_ANNOUNCE_START`, `ATTS_ANNOUNCE_FINISH`, and
+  `ATTS_ANNOUNCE_ATTENTION` — override the independently installed lifecycle
+  categories. Their persisted values live in
+  `~/.config/agent-tts/announcements.env`.
+- `ATTS_EVENT_CONFIG_FILE` — override that persisted event-settings path.
 - `ATTS_NO_AUDIO` — generate/cache clips but never play (used by tests).
 - `ATTS_STATE_DIR` — override the engine state/cache directory.
 - `ATTS_LOG_DIR` — override where `agent-tts` writes `voice.log`.
@@ -116,6 +121,9 @@ that core**, so the program works no matter which subset you pick.
 |---|---|
 | `engine` | `agent-tts` speech engine + `~/.local/bin/agent-tts` symlink |
 | `hook_files` | notify hook code under `~/.local/share/codex-claude-tts-announcements/` |
+| `start_voice` | enable start announcements for every runtime |
+| `finish_voice` | enable end announcements for every runtime |
+| `attention_voice` | enable ask-for-further-changes / needs-input announcements |
 | `codex_notify` | Codex lifecycle `notify = [...]` block in `~/.codex/config.toml` |
 | `codex_attention` | Codex `PermissionRequest` attention hook in `~/.codex/hooks.json` |
 | `grok_notify` | Grok `[[ui.notifications.hooks]]` lifecycle block in `~/.grok/config.toml` (start/finish/attention via `$GROK_EVENT`) |
