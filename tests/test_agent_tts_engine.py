@@ -37,6 +37,8 @@ _ATTS_ENV = (
     "CLAUDE_CODE_TTS_VOICE",
     "QWEN_CODEX_TTS_VOICE",
     "CLINE_TTS_VOICE",
+    "GROK_TTS_VOICE",
+    "ATTS_GROK_VOICE",
 )
 
 
@@ -161,6 +163,29 @@ def test_voice_for_kind_supports_runtime_specific_variables(engine):
     assert engine.voice_for_kind("cline", {"CLINE_TTS_VOICE": "af_legacy_cline"}) == "af_legacy_cline"
     assert engine.voice_for_kind("codex", {"CODEX_TTS_VOICE": "af_legacy_codex"}) == "af_legacy_codex"
     assert engine.voice_for_kind("qwen", {"QWEN_CODEX_TTS_VOICE": "af_legacy_qwen"}) == "af_legacy_qwen"
+
+
+def test_default_voices_are_pairwise_distinct(engine):
+    """Each runtime's built-in default Kokoro voice must differ from the others."""
+    defaults = {
+        kind: engine.voice_for_kind(kind, {})
+        for kind in ("codex", "claude", "qwen", "cline", "grok")
+    }
+    voices = list(defaults.values())
+    assert len(voices) == len(set(voices)), f"duplicate default voices: {defaults}"
+    assert defaults["grok"] == "af_kore"
+    assert defaults["grok"] != defaults["qwen"]
+
+
+def test_grok_voice_honors_acc_launch_metadata(engine):
+    """ACC's GROK_TTS_VOICE export must resolve to the Grok default."""
+    assert engine.voice_for_kind("grok", {"GROK_TTS_VOICE": "af_kore"}) == "af_kore"
+
+
+def test_grok_default_beats_stale_global_codex_tts_voice(engine, monkeypatch):
+    """A shell-wide CODEX__TTS_VOICE must not override Grok's distinct default."""
+    monkeypatch.setenv("CODEX__TTS_VOICE", "af_heart")
+    assert engine.voice_for_kind("grok", {}) == "af_kore"
 
 
 def test_cline_and_claude_reuse_shared_codex_kokoro_assets(engine, monkeypatch, tmp_path):

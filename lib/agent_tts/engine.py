@@ -572,10 +572,11 @@ def voice_for_kind(kind: str, env: dict[str, str]) -> str:
             or "af_aoede"
         )
     if kind == "grok":
+        # Grok ignores the generic CODEX__TTS_VOICE export so a stale shell-wide
+        # Local/Qwen default (af_heart) cannot override the energetic-female default.
         return (
             configured("ATTS_GROK_VOICE")
             or configured("GROK_TTS_VOICE")
-            or configured("CODEX__TTS_VOICE")
             or "af_kore"
         )
     return (

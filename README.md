@@ -69,9 +69,15 @@ Tunables (env overrides win over the persisted values):
 - `ATTS_VOICE` — global voice override.
 - `ATTS_CODEX_VOICE`, `ATTS_CLAUDE_VOICE`, `ATTS_CLINE_VOICE`, `ATTS_GROK_VOICE`, and `ATTS_QWEN_VOICE` —
   per-runtime overrides when `ATTS_VOICE` is unset. Legacy
-  `CODEX_TTS_VOICE`, `CLAUDE_TTS_VOICE`, and `QWEN_CODEX_TTS_VOICE` remain
-  supported. ACC wrappers' normalized `CODEX__TTS_VOICE` also remains
-  supported and takes precedence over per-runtime legacy names.
+  `CODEX_TTS_VOICE`, `CLAUDE_TTS_VOICE`, `GROK_TTS_VOICE`, and
+  `QWEN_CODEX_TTS_VOICE` remain supported. ACC wrappers' normalized
+  `CODEX__TTS_VOICE` also remains supported and takes precedence over
+  per-runtime legacy names.
+- Default Kokoro voices per runtime (when no override is set): codex `af_bella`,
+  claude `af_sky`, qwen/Local `af_heart`, cline `af_aoede`, grok `af_kore`
+  (energetic female; kept distinct from the other defaults). Grok ignores a
+  generic shell-wide `CODEX__TTS_VOICE` so a stale Local/Qwen export cannot
+  override `GROK_TTS_VOICE` / `ATTS_GROK_VOICE`.
 - `ATTS_MODEL_DIR` — optional shared Kokoro model directory. Cline and Claude
   automatically reuse `~/.codex/tts` when their own config homes have no model
   assets, avoiding duplicate downloads and robotic fallback speech.
