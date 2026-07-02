@@ -46,6 +46,16 @@ DEFAULT_CLARIFY_VOICE = "af_jessica"
 IDLE_NOTIFICATION_MARKER = "waiting for your input"
 
 
+def lifecycle_is_tracker_managed() -> bool:
+    """Return whether ACC already owns start/end speech for this child process."""
+    return os.environ.get("ATTS_LIFECYCLE_TRACKED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 @dataclass(frozen=True)
 class RuntimeContext:
     """Resolved runtime metadata for an incoming hook event.
@@ -494,6 +504,10 @@ def handle_claude(payload: dict[str, Any]) -> int:
         component=LOG_COMPONENT,
     )
 
+    if lifecycle_is_tracker_managed() and event in {"SessionStart", "Stop", "SubagentStop"}:
+        log.debug(f"skip tracker-managed Claude lifecycle event={event}", component=LOG_COMPONENT)
+        return 0
+
     if event == "SessionStart":
         # Claude Code re-fires SessionStart on resume/compact/clear, not just for
         # a genuinely new session. Announcing on those replays the "started"
@@ -547,6 +561,21 @@ def handle_cline(payload: dict[str, Any]) -> int:
         f"Cline event={event} project={context.project_name}",
         component=LOG_COMPONENT,
     )
+    lifecycle_events = {
+        "TaskStart",
+        "TaskResume",
+        "agent_start",
+        "agent_resume",
+        "TaskComplete",
+        "TaskCancel",
+        "TaskError",
+        "agent_end",
+        "agent_abort",
+        "agent_error",
+    }
+    if lifecycle_is_tracker_managed() and event in lifecycle_events:
+        log.debug(f"skip tracker-managed Cline lifecycle event={event}", component=LOG_COMPONENT)
+        return 0
     if event in {"TaskStart", "TaskResume", "agent_start", "agent_resume"}:
         announce("start", context)
     elif event in {
@@ -621,6 +650,9 @@ def handle_grok(environ: dict[str, str] | None = None) -> int:
         f"session_scoped={bool(session_id)} cwd={cwd}",
         component=LOG_COMPONENT,
     )
+    if lifecycle_is_tracker_managed() and event in {"session_ready", *GROK_FINISH_EVENTS}:
+        log.debug(f"skip tracker-managed Grok lifecycle event={event}", component=LOG_COMPONENT)
+        return 0
     if event == "session_ready":
         announce("start", context, feature_key=session_id)
     elif event in GROK_FINISH_EVENTS:

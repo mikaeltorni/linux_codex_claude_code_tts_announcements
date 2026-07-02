@@ -297,6 +297,22 @@ def test_context_uses_claude_code_tts_voice_alias(monkeypatch):
     assert notify.context_for({"cwd": "/repo/demo"}, "claude").voice == "am_onyx"
 
 
+def test_tracker_managed_lifecycle_hooks_do_not_duplicate_voices(monkeypatch):
+    """ACC-managed Claude/Cline/Grok children skip native start/end hook speech."""
+    calls = []
+    monkeypatch.setenv("ATTS_LIFECYCLE_TRACKED", "1")
+    monkeypatch.setattr(notify, "announce", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    notify.handle_claude({"hook_event_name": "SessionStart", "source": "startup"})
+    notify.handle_claude({"hook_event_name": "Stop"})
+    notify.handle_cline({"hookName": "TaskStart"})
+    notify.handle_cline({"hookName": "TaskComplete"})
+    notify.handle_grok({"GROK_EVENT": "session_ready"})
+    notify.handle_grok({"GROK_EVENT": "turn_complete"})
+
+    assert calls == []
+
+
 def test_context_uses_qwen_variables_for_direct_qwen_hook(monkeypatch):
     """Qwen's Local label should select its own voice, model, and config home."""
     monkeypatch.setenv("CODEX_AGENT_LABEL", "Local")
