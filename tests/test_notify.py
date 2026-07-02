@@ -439,7 +439,7 @@ def test_grok_context_defaults_to_grok_home_and_voice(monkeypatch):
     home = args[args.index("--codex-home") + 1]
     voice = args[args.index("--voice") + 1]
     assert home.endswith("/.grok")
-    assert voice == "af_heart"
+    assert voice == "af_kore"
 
 
 def test_grok_unmapped_event_is_silent(monkeypatch):

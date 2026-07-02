@@ -519,7 +519,7 @@ def voice_for_kind(kind: str, env: dict[str, str]) -> str:
             configured("ATTS_GROK_VOICE")
             or configured("GROK_TTS_VOICE")
             or configured("CODEX__TTS_VOICE")
-            or "af_heart"
+            or "af_kore"
         )
     return (
         configured("ATTS_CODEX_VOICE")
