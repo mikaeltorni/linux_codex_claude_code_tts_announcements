@@ -165,7 +165,7 @@ def test_voice_for_kind_supports_runtime_specific_variables(engine):
     assert engine.voice_for_kind("qwen", {"QWEN_CODEX_TTS_VOICE": "af_legacy_qwen"}) == "af_legacy_qwen"
 
 
-def test_default_voices_are_pairwise_distinct(engine):
+def test_default_voices_are_pairwise_distinct(engine, capsys):
     """Each runtime's built-in default Kokoro voice must differ from the others."""
     defaults = {
         kind: engine.voice_for_kind(kind, {})
@@ -175,6 +175,14 @@ def test_default_voices_are_pairwise_distinct(engine):
     assert len(voices) == len(set(voices)), f"duplicate default voices: {defaults}"
     assert defaults["grok"] == "af_kore"
     assert defaults["grok"] != defaults["qwen"]
+    # ACC uses af_nova for cline while this engine uses af_aoede; Grok must
+    # stay distinct from both cross-repo cline defaults.
+    acc_cline_default = "af_nova"
+    assert defaults["grok"] != defaults["cline"]
+    assert defaults["grok"] != acc_cline_default
+    print(f"tts_engine_default_voices={defaults}")
+    print(f"acc_cline_default={acc_cline_default}")
+    print(f"grok_default={defaults['grok']}")
 
 
 def test_grok_voice_honors_acc_launch_metadata(engine):
