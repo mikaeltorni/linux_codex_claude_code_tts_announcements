@@ -41,6 +41,27 @@ CODEX_LEGACY_BLOCK_RE = re.compile(
 LEGACY_NOTIFY_LINE_RE = re.compile(r'(?m)^notify = \["python3", ".*notify_agent\.py"\]\n+')
 #: Marker proving an event-named Cline hook is owned by this installer.
 CLINE_HOOK_MARKER = "TTS ANNOUNCEMENTS CLINE HOOK"
+#: Matches the generated Grok notification-hook block (for idempotent replacement).
+GROK_TTS_BLOCK_RE = re.compile(
+    r"\n*# BEGIN TTS ANNOUNCEMENTS GROK HOOKS \(generated\).*?# END TTS ANNOUNCEMENTS GROK HOOKS \(generated\)\n*",
+    flags=re.S,
+)
+#: Matches one bare ``[[ui.notifications.hooks]]`` table (header up to the next
+#: table header or comment marker). Grok rewrites its config.toml when settings
+#: change and may strip our comment markers, so idempotent replacement must also
+#: recognize an unmarked table that carries the generated notify command.
+GROK_HOOK_TABLE_RE = re.compile(
+    r"\[\[ui\.notifications\.hooks\]\]\n(?:(?!\[|# BEGIN|# END)[^\n]*\n?)*",
+)
+#: Grok notification events the generated hook subscribes to. The single hook
+#: command branches on ``$GROK_EVENT`` (see tts_announcements.notify.handle_grok).
+GROK_HOOK_EVENTS = (
+    "session_ready",
+    "turn_complete",
+    "task_complete",
+    "agent_error",
+    "approval_required",
+)
 
 
 @log.log_call(LOGGER)
@@ -127,6 +148,78 @@ def configure_codex_hooks(hooks_file: Path, command: str) -> None:
     hooks_file.parent.mkdir(parents=True, exist_ok=True)
     hooks_file.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
     log.info(f"merged Codex attention hook into {hooks_file}", component=LOG_COMPONENT)
+
+
+@log.log_call(LOGGER)
+def configure_grok_notify(config_file: Path, command: str) -> None:
+    """Append the generated Grok notification-hook block, preserving user TOML.
+
+    Grok's hook contract is ``[[ui.notifications.hooks]]`` tables whose command
+    receives ``GROK_EVENT``/``GROK_MESSAGE``/``GROK_SESSION_ID`` in the
+    environment. The block is *appended* (unlike the prepended Codex ``notify``
+    key) because a TOML array-of-tables header would otherwise capture any
+    top-level keys that follow it. Safe to run repeatedly (idempotent).
+
+    Args:
+        config_file: Path to the Grok ``config.toml``; created with parents if
+            missing.
+        command: The notify command string, invoked with ``--grok`` so the
+            notifier reads the event from the environment.
+    """
+    events = ", ".join(json.dumps(event) for event in GROK_HOOK_EVENTS)
+    block = (
+        "# BEGIN TTS ANNOUNCEMENTS GROK HOOKS (generated)\n"
+        "[[ui.notifications.hooks]]\n"
+        f"command = {json.dumps(command + ' --grok')}\n"
+        f"events = [{events}]\n"
+        "only_unfocused = false\n"
+        "timeout_secs = 30\n"
+        "# END TTS ANNOUNCEMENTS GROK HOOKS (generated)\n"
+    )
+    try:
+        text = config_file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        text = ""
+    text = _strip_generated_grok_tables(text)
+    text = text.rstrip()
+    updated = (text + "\n\n" + block) if text else block
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(updated, encoding="utf-8")
+    log.info(f"wrote Grok notification hooks to {config_file}", component=LOG_COMPONENT)
+
+
+@log.log_call(LOGGER)
+def remove_grok_notify(config_file: Path) -> None:
+    """Strip the generated Grok hook block, leaving unrelated TOML intact.
+
+    The inverse of :func:`configure_grok_notify`; safe when the file or block
+    is absent.
+
+    Args:
+        config_file: Path to the Grok ``config.toml`` to clean.
+    """
+    try:
+        text = config_file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return
+    text = _strip_generated_grok_tables(text)
+    config_file.write_text(text.strip() + "\n" if text.strip() else "", encoding="utf-8")
+    log.info(f"removed Grok notification hooks from {config_file}", component=LOG_COMPONENT)
+
+
+def _strip_generated_grok_tables(text: str) -> str:
+    """Remove every generated Grok hook table, marked or not.
+
+    Strips the marker-delimited block, then any bare
+    ``[[ui.notifications.hooks]]`` table whose command references
+    ``notify_agent.py`` — Grok's own config rewrites can drop the comment
+    markers while keeping the table. User-authored hook tables are preserved.
+    """
+    text = GROK_TTS_BLOCK_RE.sub("\n", text)
+    return GROK_HOOK_TABLE_RE.sub(
+        lambda match: "" if "notify_agent.py" in match.group(0) else match.group(0),
+        text,
+    )
 
 
 def _read_settings(settings_file: Path) -> dict[str, Any]:
@@ -488,7 +581,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Tool name that gates the notify command (PreToolUse attention hook).",
     )
 
+    grok = subcommands.add_parser("grok")
+    grok.add_argument("config_file", type=Path)
+    grok.add_argument("command")
+
     # Symmetric removal subcommands (used by the component uninstall path).
+    rm_grok = subcommands.add_parser("remove-grok")
+    rm_grok.add_argument("config_file", type=Path)
+
     rm_codex = subcommands.add_parser("remove-codex")
     rm_codex.add_argument("config_file", type=Path)
 
@@ -525,6 +625,10 @@ def main(argv: list[str] | None = None) -> int:
         configure_claude_hooks(args.settings_file, args.command, args.events)
     elif args.command_name == "cline":
         configure_cline_hook(args.hook_file, args.command, args.filter_tool)
+    elif args.command_name == "grok":
+        configure_grok_notify(args.config_file, args.command)
+    elif args.command_name == "remove-grok":
+        remove_grok_notify(args.config_file)
     elif args.command_name == "remove-codex":
         remove_codex_notify(args.config_file)
     elif args.command_name == "remove-codex-hooks":

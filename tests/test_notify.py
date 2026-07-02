@@ -401,3 +401,57 @@ def test_cline_pre_tool_use_ask_question_without_question_uses_default(monkeypat
     )
     assert calls[-1][:1] == ["clarify"]
     assert "Cline needs your attention" in calls[-1]
+
+
+def test_grok_events_route_start_finish_and_attention(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+    monkeypatch.chdir("/tmp")
+    for name in ("CODEX_AGENT_LABEL", "CODEX_AGENT_KIND", "CODEX_HOME"):
+        monkeypatch.delenv(name, raising=False)
+
+    env = {"GROK_EVENT": "session_ready", "GROK_SESSION_ID": "grok-1", "GROK_MESSAGE": ""}
+    assert notify.handle_grok(env) == 0
+    assert calls[-1][:3] == ["announce", "--event", "start"]
+    assert "--feature-key" in calls[-1] and "grok-1" in calls[-1]
+
+    for finish_event in ("turn_complete", "task_complete", "agent_error"):
+        env["GROK_EVENT"] = finish_event
+        assert notify.handle_grok(env) == 0
+        assert calls[-1][:3] == ["announce", "--event", "finish"]
+
+    env["GROK_EVENT"] = "approval_required"
+    env["GROK_MESSAGE"] = "Approve rm -rf?"
+    assert notify.handle_grok(env) == 0
+    assert calls[-1][0] == "clarify"
+    assert "Approve rm -rf?" in calls[-1]
+
+
+def test_grok_context_defaults_to_grok_home_and_voice(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+    for name in ("CODEX_AGENT_LABEL", "CODEX_AGENT_KIND", "CODEX_HOME",
+                 "ATTS_VOICE", "ATTS_GROK_VOICE", "GROK_TTS_VOICE", "CODEX__TTS_VOICE"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert notify.handle_grok({"GROK_EVENT": "turn_complete"}) == 0
+    args = calls[-1]
+    home = args[args.index("--codex-home") + 1]
+    voice = args[args.index("--voice") + 1]
+    assert home.endswith("/.grok")
+    assert voice == "af_heart"
+
+
+def test_grok_unmapped_event_is_silent(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+    assert notify.handle_grok({"GROK_EVENT": "session_start"}) == 0
+    assert calls == []
+
+
+def test_main_routes_grok_flag_to_env_handler(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+    monkeypatch.setenv("GROK_EVENT", "turn_complete")
+    assert notify.main(["notify_agent.py", "--grok"]) == 0
+    assert calls[-1][:3] == ["announce", "--event", "finish"]

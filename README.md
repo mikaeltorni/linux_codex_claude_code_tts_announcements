@@ -67,7 +67,7 @@ Tunables (env overrides win over the persisted values):
 - `ATTS_VOLUME_PERCENT` — linear volume percentage (default `1000`).
 - `ATTS_SILENT` — set truthy to mute one invocation.
 - `ATTS_VOICE` — global voice override.
-- `ATTS_CODEX_VOICE`, `ATTS_CLAUDE_VOICE`, `ATTS_CLINE_VOICE`, and `ATTS_QWEN_VOICE` —
+- `ATTS_CODEX_VOICE`, `ATTS_CLAUDE_VOICE`, `ATTS_CLINE_VOICE`, `ATTS_GROK_VOICE`, and `ATTS_QWEN_VOICE` —
   per-runtime overrides when `ATTS_VOICE` is unset. Legacy
   `CODEX_TTS_VOICE`, `CLAUDE_TTS_VOICE`, and `QWEN_CODEX_TTS_VOICE` remain
   supported. ACC wrappers' normalized `CODEX__TTS_VOICE` also remains
@@ -118,6 +118,7 @@ that core**, so the program works no matter which subset you pick.
 | `hook_files` | notify hook code under `~/.local/share/codex-claude-tts-announcements/` |
 | `codex_notify` | Codex lifecycle `notify = [...]` block in `~/.codex/config.toml` |
 | `codex_attention` | Codex `PermissionRequest` attention hook in `~/.codex/hooks.json` |
+| `grok_notify` | Grok `[[ui.notifications.hooks]]` lifecycle block in `~/.grok/config.toml` (start/finish/attention via `$GROK_EVENT`) |
 | `claude_session_start` | Claude Code `SessionStart` hook |
 | `claude_stop` | Claude Code `Stop` hook |
 | `claude_subagent_stop` | Claude Code `SubagentStop` hook |

@@ -147,6 +147,21 @@ configure_cline_event_hook() {
   tts_msg "Configured Cline $event hook in $hook_file"
 }
 
+# Write the generated Grok notification-hook block in ~/.grok/config.toml.
+# Grok's [[ui.notifications.hooks]] contract passes GROK_EVENT / GROK_MESSAGE /
+# GROK_SESSION_ID in the environment, so the notifier runs with --grok and no
+# stdin payload.
+configure_grok_notify_hook() {
+  local home config_file command
+  home="$(tts_target_home)"
+  config_file="${GROK_CONFIG_FILE:-$home/.grok/config.toml}"
+  command="env CODEX_AGENT_KIND=grok CODEX_AGENT_LABEL=grok $(tts_hook_command)"
+  ensure_tts_core
+  mkdir -p "$(dirname "$config_file")"
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks grok "$config_file" "$command"
+  tts_msg "Configured Grok notification hooks in $config_file"
+}
+
 configure_cline_task_start_hook()   { configure_cline_event_hook TaskStart; }
 configure_cline_task_resume_hook()  { configure_cline_event_hook TaskResume; }
 configure_cline_task_complete_hook(){ configure_cline_event_hook TaskComplete; }
@@ -171,6 +186,7 @@ tts_config_has() {
 detect_engine()       { [ -e "$(tts_bin_dir)/agent-tts" ] || [ -f "$(tts_install_root)/scripts/agent-tts" ]; }
 detect_hook_files()   { [ -f "$(tts_install_root)/scripts/notify_agent.py" ]; }
 detect_codex_notify() { tts_config_has "${CODEX_CONFIG_FILE:-$(tts_target_home)/.codex/config.toml}"; }
+detect_grok_notify()  { tts_config_has "${GROK_CONFIG_FILE:-$(tts_target_home)/.grok/config.toml}"; }
 detect_codex_attention() {
   local f="${CODEX_HOOKS_FILE:-$(tts_target_home)/.codex/hooks.json}"
   [ -f "$f" ] && grep -q 'PermissionRequest' "$f" 2>/dev/null && grep -q 'notify_agent.py' "$f" 2>/dev/null
@@ -234,6 +250,11 @@ uninstall_codex_attention() {
   local f="${CODEX_HOOKS_FILE:-$(tts_target_home)/.codex/hooks.json}"
   tts_msg "Removing Codex attention hook from $f"
   PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks remove-codex-hooks "$f"
+}
+uninstall_grok_notify() {
+  local f="${GROK_CONFIG_FILE:-$(tts_target_home)/.grok/config.toml}"
+  tts_msg "Removing Grok notification hooks from $f"
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks remove-grok "$f"
 }
 _tts_remove_claude_event() {
   local event="$1" f="${CLAUDE_SETTINGS_FILE:-$(tts_target_home)/.claude/settings.json}"

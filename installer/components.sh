@@ -9,7 +9,7 @@
 # Entry format: "id|label|default(on/off)|function".
 
 ISC_REPO_NAME="linux_codex_claude_code_tts_announcements"
-ISC_REPO_LABEL="Codex/Claude Code/Cline TTS announcements"
+ISC_REPO_LABEL="Codex/Claude Code/Cline/Grok TTS announcements"
 
 # Every individual notify hook is its own selectable, optional component so a
 # user can wire up exactly the runtimes and lifecycle events they use. The
@@ -21,6 +21,7 @@ ISC_COMPONENTS=(
   "hook_files|TTS notify hook files|on|install_tts_hook_files|detect_hook_files|uninstall_hook_files"
   "codex_notify|Codex lifecycle notify block (config.toml)|on|configure_codex_notify_block|detect_codex_notify|uninstall_codex_notify"
   "codex_attention|Codex PermissionRequest attention hook (hooks.json)|on|configure_codex_attention_hook|detect_codex_attention|uninstall_codex_attention"
+  "grok_notify|Grok lifecycle notification hooks (config.toml)|on|configure_grok_notify_hook|detect_grok_notify|uninstall_grok_notify"
   "claude_session_start|Claude Code SessionStart hook|on|configure_claude_session_start_hook|detect_claude_session_start|uninstall_claude_session_start"
   "claude_stop|Claude Code Stop hook|on|configure_claude_stop_hook|detect_claude_stop|uninstall_claude_stop"
   "claude_subagent_stop|Claude Code SubagentStop hook|on|configure_claude_subagent_stop_hook|detect_claude_subagent_stop|uninstall_claude_subagent_stop"

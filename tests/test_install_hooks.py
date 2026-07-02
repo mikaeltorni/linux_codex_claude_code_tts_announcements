@@ -304,3 +304,55 @@ def test_cline_pre_tool_use_hook_gates_notifier_on_ask_question(tmp_path):
         "contextModification": "",
         "errorMessage": "",
     }
+
+
+def test_grok_notify_block_is_appended_and_idempotent(tmp_path):
+    from tts_announcements import install_hooks
+
+    config = tmp_path / ".grok" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text('hints = { project_picker_disabled = true }\n', encoding="utf-8")
+    command = "env CODEX_AGENT_KIND=grok CODEX_AGENT_LABEL=grok python3 /x/notify_agent.py"
+
+    install_hooks.configure_grok_notify(config, command)
+    install_hooks.configure_grok_notify(config, command)
+
+    text = config.read_text(encoding="utf-8")
+    assert text.count("[[ui.notifications.hooks]]") == 1
+    assert text.count("BEGIN TTS ANNOUNCEMENTS GROK HOOKS") == 1
+    # User TOML stays first so the appended table array cannot capture it.
+    assert text.startswith("hints = ")
+    assert '"--grok"' not in text  # --grok is inside the command string
+    assert "notify_agent.py --grok" in text
+    for event in install_hooks.GROK_HOOK_EVENTS:
+        assert f'"{event}"' in text
+    assert "only_unfocused = false" in text
+
+    install_hooks.remove_grok_notify(config)
+    cleaned = config.read_text(encoding="utf-8")
+    assert "GROK HOOKS" not in cleaned
+    assert cleaned.strip() == 'hints = { project_picker_disabled = true }'
+
+
+def test_grok_writer_replaces_unmarked_table_after_grok_config_rewrite(tmp_path):
+    from tts_announcements import install_hooks
+
+    config = tmp_path / "config.toml"
+    # Simulate Grok rewriting its config: markers stripped, table kept, and a
+    # user-authored hook table present.
+    config.write_text(
+        "[ui]\nyolo = false\n\n"
+        "[[ui.notifications.hooks]]\n"
+        'command = "curl -s -d msg ntfy.sh/mine"\n'
+        'events = ["turn_complete"]\n\n'
+        "[[ui.notifications.hooks]]\n"
+        'command = "env CODEX_AGENT_KIND=grok python3 /old/notify_agent.py --grok"\n'
+        'events = ["turn_complete"]\n',
+        encoding="utf-8",
+    )
+    install_hooks.configure_grok_notify(config, "python3 /new/notify_agent.py")
+    text = config.read_text(encoding="utf-8")
+    assert text.count("[[ui.notifications.hooks]]") == 2
+    assert "ntfy.sh/mine" in text
+    assert "/old/notify_agent.py" not in text
+    assert "/new/notify_agent.py --grok" in text

@@ -185,6 +185,7 @@ def voice_label(agent_display: str = "", label: str = "", kind: str = "") -> str
         "api": "API",
         "claude": "claude",
         "cline": "cline",
+        "grok": "grok",
     }
     if kind in canonical:
         return canonical[kind]
@@ -512,6 +513,13 @@ def voice_for_kind(kind: str, env: dict[str, str]) -> str:
             or configured("CLINE_TTS_VOICE")
             or configured("CODEX__TTS_VOICE")
             or "af_aoede"
+        )
+    if kind == "grok":
+        return (
+            configured("ATTS_GROK_VOICE")
+            or configured("GROK_TTS_VOICE")
+            or configured("CODEX__TTS_VOICE")
+            or "af_heart"
         )
     return (
         configured("ATTS_CODEX_VOICE")

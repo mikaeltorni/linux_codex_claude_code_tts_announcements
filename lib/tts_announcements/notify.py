@@ -212,15 +212,15 @@ def project_name_from(payload: dict[str, Any]) -> str:
 def runtime_kind(default_label: str, label: str) -> str:
     """Resolve the agent kind for payload formats shared by multiple runtimes."""
     explicit = normalize_text(os.environ.get("CODEX_AGENT_KIND", "")).casefold()
-    if explicit in {"api", "claude", "cline", "codex", "qwen"}:
+    if explicit in {"api", "claude", "cline", "codex", "grok", "qwen"}:
         return explicit
     normalized_label = normalize_text(label).casefold()
     if normalized_label.startswith(("local", "qwen")):
         return "qwen"
-    for kind in ("claude", "cline", "codex", "api"):
+    for kind in ("claude", "cline", "codex", "grok", "api"):
         if normalized_label.startswith(kind):
             return kind
-    return default_label if default_label in {"claude", "cline", "codex"} else "codex"
+    return default_label if default_label in {"claude", "cline", "codex", "grok"} else "codex"
 
 
 def voice_for_kind(kind: str) -> str:
@@ -265,6 +265,7 @@ def context_for(payload: dict[str, Any], default_label: str) -> RuntimeContext:
         "qwen": ".codex-qwen",
         "api": ".codex-api",
         "cline": ".cline",
+        "grok": ".grok",
     }.get(kind, ".codex")
     codex_home = Path(os.environ.get("CODEX_HOME") or default_home)
     model_name = normalize_text(
@@ -587,6 +588,51 @@ def handle_cline(payload: dict[str, Any]) -> int:
     return 0
 
 
+#: Grok notification-hook events that mean "the agent finished working".
+GROK_FINISH_EVENTS = {"turn_complete", "task_complete", "agent_error"}
+
+
+def handle_grok(environ: dict[str, str] | None = None) -> int:
+    """Route a Grok notification hook to the matching tracker action.
+
+    Grok's ``[[ui.notifications.hooks]]`` contract passes no stdin payload;
+    the event arrives as the ``GROK_EVENT``, ``GROK_MESSAGE``, and
+    ``GROK_SESSION_ID`` environment variables (see the Grok CLI configuration
+    guide). The hook runs in the session's working directory, so ``os.getcwd``
+    supplies the project path.
+
+    Args:
+        environ: Environment mapping to read; defaults to ``os.environ``.
+
+    Returns:
+        int: Always ``0`` so TTS can never fail a Grok turn.
+    """
+    env = os.environ if environ is None else environ
+    event = normalize_text(env.get("GROK_EVENT", "")).casefold()
+    message = normalize_text(env.get("GROK_MESSAGE", ""))
+    session_id = normalize_text(env.get("GROK_SESSION_ID", ""))
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        cwd = ""
+    context = context_for({"cwd": cwd}, "grok")
+    log.info(
+        f"Grok event={event} project={context.project_name} "
+        f"session_scoped={bool(session_id)} cwd={cwd}",
+        component=LOG_COMPONENT,
+    )
+    if event == "session_ready":
+        announce("start", context, feature_key=session_id)
+    elif event in GROK_FINISH_EVENTS:
+        announce("finish", context, feature_key=session_id)
+    elif event == "approval_required":
+        default_message = f"{context.label.capitalize()} needs your attention"
+        clarify(context, message or default_message)
+    else:
+        log.debug(f"ignoring unmapped Grok event {event!r}", component=LOG_COMPONENT)
+    return 0
+
+
 def main(argv: list[str] | None = None, stdin_text: str | None = None) -> int:
     """CLI entry point for both Codex and Claude hook styles.
 
@@ -599,6 +645,8 @@ def main(argv: list[str] | None = None, stdin_text: str | None = None) -> int:
         int: Process exit code, always ``0`` so a hook never fails the agent run.
     """
     argv = argv if argv is not None else sys.argv
+    if "--grok" in argv[1:]:
+        return handle_grok()
     payload = parse_payload(argv, stdin_text=stdin_text)
     if not payload:
         return 0
