@@ -46,14 +46,31 @@ DEFAULT_CLARIFY_VOICE = "af_jessica"
 IDLE_NOTIFICATION_MARKER = "waiting for your input"
 
 
+def _env_flag(name: str) -> bool:
+    """Return whether the environment variable ``name`` is set to a truthy value.
+
+    Args:
+        name: Environment variable to read; ``1``/``true``/``yes``/``on``
+            (case-insensitive) count as set.
+    """
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def lifecycle_is_tracker_managed() -> bool:
     """Return whether ACC already owns start/end speech for this child process."""
-    return os.environ.get("ATTS_LIFECYCLE_TRACKED", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return _env_flag("ATTS_LIFECYCLE_TRACKED")
+
+
+def announcements_suppressed() -> bool:
+    """Return whether this process opted out of all TTS announcements.
+
+    Monitoring surfaces that run a real CLI TUI without a human behind it —
+    e.g. the agentic-cli-status tmux debug console — export
+    ``ATTS_SUPPRESS_ANNOUNCEMENTS=1`` so their lifecycle hooks never speak
+    (otherwise every login announces a fake session such as
+    "Project mk started" from the console's home-directory Claude window).
+    """
+    return _env_flag("ATTS_SUPPRESS_ANNOUNCEMENTS")
 
 
 @dataclass(frozen=True)
@@ -677,6 +694,11 @@ def main(argv: list[str] | None = None, stdin_text: str | None = None) -> int:
         int: Process exit code, always ``0`` so a hook never fails the agent run.
     """
     argv = argv if argv is not None else sys.argv
+    if announcements_suppressed():
+        log.debug(
+            "skip hook: ATTS_SUPPRESS_ANNOUNCEMENTS is set", component=LOG_COMPONENT
+        )
+        return 0
     if "--grok" in argv[1:]:
         return handle_grok()
     payload = parse_payload(argv, stdin_text=stdin_text)

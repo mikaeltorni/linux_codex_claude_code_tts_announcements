@@ -66,6 +66,11 @@ Tunables (env overrides win over the persisted values):
 - `ATTS_SPEED` — speech speed multiplier (default `1.5`).
 - `ATTS_VOLUME_PERCENT` — linear volume percentage (default `1000`).
 - `ATTS_SILENT` — set truthy to mute one invocation.
+- `ATTS_SUPPRESS_ANNOUNCEMENTS` — set truthy in a CLI's environment to make
+  every notification hook of that process exit silently. Used by monitoring
+  surfaces that run real CLI TUIs without a human behind them (e.g. the
+  agentic-cli-status tmux debug console), whose lifecycle hooks would
+  otherwise announce fake sessions at login.
 - `ATTS_VOICE` — global voice override.
 - `ATTS_CODEX_VOICE`, `ATTS_CLAUDE_VOICE`, `ATTS_CLINE_VOICE`, `ATTS_GROK_VOICE`, and `ATTS_QWEN_VOICE` —
   per-runtime overrides when `ATTS_VOICE` is unset. Legacy

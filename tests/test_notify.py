@@ -166,6 +166,28 @@ def test_pre_tool_use_is_silent(monkeypatch):
     assert calls == []
 
 
+def test_suppress_env_silences_all_hook_styles(monkeypatch):
+    """ATTS_SUPPRESS_ANNOUNCEMENTS=1 must silence every hook without erroring.
+
+    Monitoring surfaces (the agentic-cli-status tmux console) run real CLI TUIs
+    whose lifecycle hooks would otherwise announce fake sessions such as
+    "Project mk started" at login.
+    """
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+    monkeypatch.setenv("ATTS_SUPPRESS_ANNOUNCEMENTS", "1")
+
+    claude = json.dumps(
+        {"hook_event_name": "SessionStart", "source": "startup", "cwd": "/home/mk"}
+    )
+    assert notify.main(["notify_agent.py"], stdin_text=claude) == 0
+    monkeypatch.setenv("GROK_EVENT", "session_ready")
+    assert notify.main(["notify_agent.py", "--grok"]) == 0
+    codex = json.dumps({"type": "agent-turn-complete", "status": 0})
+    assert notify.main(["notify_agent.py", codex]) == 0
+    assert calls == []
+
+
 def test_main_accepts_claude_stdin_payload(monkeypatch):
     calls = []
     monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
