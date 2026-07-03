@@ -43,6 +43,8 @@ See the full cross-repository map in
 When installed, this repo:
 
 - installs the `agent-tts` speech engine and links `~/.local/bin/agent-tts`
+- installs a hash-locked ONNX Runtime CUDA target when an NVIDIA GPU and `uv`
+  are available; CPU synthesis remains the fallback
 - copies hook code to `$HOME/.local/share/codex-claude-tts-announcements/`
 - writes a generated Codex `notify = [...]` block in `$HOME/.codex/config.toml`
 - adds a Codex `PermissionRequest` attention hook to `$HOME/.codex/hooks.json`
@@ -86,6 +88,11 @@ Tunables (env overrides win over the persisted values):
 - `ATTS_MODEL_DIR` — optional shared Kokoro model directory. Cline and Claude
   automatically reuse `~/.codex/tts` when their own config homes have no model
   assets, avoiding duplicate downloads and robotic fallback speech.
+- `ATTS_DEVICE` — `auto` (default), `cuda`/`gpu`, or `cpu`. Auto mode uses the
+  installed CUDA runtime only when at least 1024 MiB of VRAM is free. A CUDA
+  synthesis error is logged and retried once on CPU.
+- `ATTS_GPU_MIN_FREE_MIB` — change the auto-mode free-VRAM guard (default
+  `1024`). `ATTS_GPU_RUNTIME_DIR` overrides the installer-managed runtime path.
 - `ATTS_ANNOUNCE_WORKSPACE=0` — disable the spoken workspace suffix.
 - `ATTS_ANNOUNCE_START`, `ATTS_ANNOUNCE_FINISH`, and
   `ATTS_ANNOUNCE_ATTENTION` — override the independently installed lifecycle
@@ -109,6 +116,10 @@ directory without changing its stdout output.
 
 - The Kokoro model assets under `<codex-home>/tts` (installed by Agent Command
   Center's LM Studio component) and `uvx` for synthesis; `ffmpeg` for volume.
+- Optional GPU synthesis needs an NVIDIA GPU and `uv`. The installer places the
+  CUDA 12/cuDNN runtime under
+  `~/.local/share/codex-claude-tts-announcements/gpu-runtime`; set
+  `ATTS_INSTALL_GPU_RUNTIME=0` while installing to keep a CPU-only setup.
 - For the notify hooks: `codex-agent-tracker` (Agent Command Center).
 
 ## Installation
@@ -120,6 +131,11 @@ bash install.sh --all        # install every component
 bash install.sh --list-components
 bash install.sh --select engine,claude_stop   # install exactly these
 ```
+
+GPU Python dependencies are pinned in `uv.lock` and exported with hashes in
+`requirements-gpu.txt`. The project-level `exclude-newer = "24 hours"` policy
+prevents newly published dependency releases from entering a regenerated lock;
+plain `pip install <package>` is not a supported installation path.
 
 ### Selectable components
 

@@ -40,6 +40,71 @@ tts_bin_dir() {
   printf '%s\n' "${TTS_BIN_DIR:-$(tts_target_home)/.local/bin}"
 }
 
+# Resolve uv without assuming the target user's local bin directory is on PATH.
+tts_resolve_uv() {
+  local candidate
+  for candidate in "$(command -v uv 2>/dev/null || true)" \
+                   "$(tts_target_home)/.local/bin/uv" \
+                   "$(tts_target_home)/.cargo/bin/uv"; do
+    [ -n "$candidate" ] && [ -x "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+  done
+  return 1
+}
+
+# Install the hash-locked CUDA execution provider into an isolated Python
+# target. Kokoro's normal uvx environment keeps its CPU ONNX Runtime; agent-tts
+# prepends this target only for CUDA attempts, avoiding the upstream wheel-file
+# collision while retaining a clean CPU fallback.
+install_agent_tts_gpu_runtime() {
+  local root runtime requirements marker fingerprint uv
+  [ "${ATTS_INSTALL_GPU_RUNTIME:-1}" != 0 ] || {
+    tts_log "Skipping optional GPU runtime (ATTS_INSTALL_GPU_RUNTIME=0)"
+    return 0
+  }
+  command -v nvidia-smi >/dev/null 2>&1 || {
+    tts_log "Skipping optional GPU runtime: nvidia-smi is unavailable"
+    return 0
+  }
+  nvidia-smi -L >/dev/null 2>&1 || {
+    tts_log "Skipping optional GPU runtime: no usable NVIDIA GPU"
+    return 0
+  }
+  uv="$(tts_resolve_uv 2>/dev/null || true)"
+  [ -n "$uv" ] || {
+    tts_log "Skipping optional GPU runtime: uv is unavailable; CPU remains enabled"
+    return 0
+  }
+  requirements="$SCRIPT_DIR/requirements-gpu.txt"
+  [ -f "$requirements" ] || {
+    tts_log "Skipping optional GPU runtime: missing $requirements; CPU remains enabled"
+    return 0
+  }
+  root="$(tts_install_root)"
+  runtime="$root/gpu-runtime"
+  marker="$runtime/.requirements.sha256"
+  fingerprint="$(sha256sum "$requirements" | awk '{print $1}')"
+  mkdir -p "$runtime"
+  install -m 0644 "$requirements" "$root/requirements-gpu.txt"
+  if [ -d "$runtime/onnxruntime" ] && [ -d "$runtime/python/onnxruntime" ] && \
+     [ -d "$runtime/nvidia" ] && \
+     [ "$(cat "$marker" 2>/dev/null || true)" = "$fingerprint" ]; then
+    tts_log "GPU runtime already matches locked requirements"
+    return 0
+  fi
+  tts_msg "Installing hash-locked ONNX Runtime GPU support"
+  if "$uv" pip sync --require-hashes --target "$runtime" \
+       --python 3.12 "$root/requirements-gpu.txt"; then
+    mkdir -p "$runtime/python"
+    rm -rf "$runtime/python/onnxruntime"
+    ln -s ../onnxruntime "$runtime/python/onnxruntime"
+    printf '%s\n' "$fingerprint" >"$marker"
+    tts_log "Installed GPU runtime in $runtime"
+  else
+    tts_log "GPU runtime installation failed; CPU synthesis remains enabled"
+  fi
+  return 0
+}
+
 # Resolve the persistent event-category settings consumed by agent-tts.
 tts_event_config_file() {
   printf '%s\n' "${ATTS_EVENT_CONFIG_FILE:-$(tts_target_home)/.config/agent-tts/announcements.env}"
@@ -110,6 +175,7 @@ install_agent_tts_engine() {
   # The entrypoint resolves its bundled package relative to its real path, so a
   # symlink in PATH keeps finding `$root/lib`.
   ln -sf "$root/scripts/agent-tts" "$bin/agent-tts"
+  install_agent_tts_gpu_runtime
   initialize_tts_event_settings
   tts_msg "Installed agent-tts engine to $root and linked $bin/agent-tts"
 }
@@ -298,7 +364,10 @@ detect_cline_pre_tool_use()  { _tts_cline_has_event PreToolUse; }
 uninstall_engine() {
   tts_msg "Removing agent-tts engine"
   rm -f "$(tts_bin_dir)/agent-tts"
-  rm -rf "$(tts_install_root)/lib/agent_tts" "$(tts_install_root)/scripts/agent-tts"
+  rm -rf "$(tts_install_root)/lib/agent_tts" \
+         "$(tts_install_root)/scripts/agent-tts" \
+         "$(tts_install_root)/gpu-runtime"
+  rm -f "$(tts_install_root)/requirements-gpu.txt"
 }
 uninstall_start_voice()     { tts_set_event_setting ATTS_ANNOUNCE_START 0; }
 uninstall_finish_voice()    { tts_set_event_setting ATTS_ANNOUNCE_FINISH 0; }

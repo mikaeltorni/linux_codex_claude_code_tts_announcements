@@ -22,6 +22,9 @@ names are still honored as fallbacks so existing installs keep working:
   * ``ATTS_QWEN_VOICE``       (was ``QWEN_CODEX_TTS_VOICE``)
   * ``ATTS_CLINE_VOICE``      (was ``CLINE_TTS_VOICE``)
   * ``ATTS_MODEL_DIR``        shared Kokoro model/voices directory override
+  * ``ATTS_DEVICE``           ``auto`` (default), ``cuda``, or ``cpu``
+  * ``ATTS_GPU_RUNTIME_DIR``  installer-managed ONNX Runtime GPU override
+  * ``ATTS_GPU_MIN_FREE_MIB`` free-VRAM guard for automatic CUDA selection
   * ``ATTS_ANNOUNCE_WORKSPACE`` (was ``AGENT_COMMAND_CENTER_ANNOUNCE_WORKSPACE``)
   * ``ATTS_ANNOUNCE_START``    enables/disables start announcements
   * ``ATTS_ANNOUNCE_FINISH``   enables/disables end announcements
@@ -73,6 +76,7 @@ FALSEY = {"0", "false", "no", "n", "off", "disabled"}
 DEFAULT_TTS_SPEED = 1.5
 DEFAULT_TTS_VOLUME_PERCENT = 1000.0
 LEGACY_DEFAULT_TTS_VOLUME_ENV = "125"
+DEFAULT_GPU_MIN_FREE_MIB = 1024
 
 SILENT_ENABLED_TEXT = "Agent command center silent mode enabled. Announcements muted."
 SILENT_DISABLED_TEXT = "Agent command center silent mode unmuted. Announcements restored."
@@ -707,6 +711,137 @@ def resolve_tts_dir(codex_home: Path) -> Path:
     return codex_home / "tts"
 
 
+def gpu_runtime_dir() -> Path:
+    """Return the installer-managed Python target containing ONNX Runtime GPU."""
+    configured = _first_env("ATTS_GPU_RUNTIME_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".local/share/codex-claude-tts-announcements/gpu-runtime"
+
+
+def gpu_runtime_available() -> bool:
+    """Return whether the isolated CUDA execution-provider files are installed."""
+    runtime = gpu_runtime_dir()
+    return (
+        (runtime / "onnxruntime").is_dir()
+        and (runtime / "python/onnxruntime").is_dir()
+        and (runtime / "nvidia").is_dir()
+    )
+
+
+def gpu_free_memory_mib() -> int | None:
+    """Return free VRAM on the first NVIDIA GPU, or ``None`` if unavailable."""
+    output = _capture_command(
+        [
+            "nvidia-smi",
+            "--query-gpu=memory.free",
+            "--format=csv,noheader,nounits",
+        ],
+        timeout=2.0,
+    )
+    if not output:
+        return None
+    try:
+        return int(output.splitlines()[0].strip())
+    except (IndexError, ValueError):
+        LOGGER.warning("could not parse nvidia-smi free-memory output %r", output)
+        return None
+
+
+def gpu_min_free_mib() -> int:
+    """Return the configured automatic-CUDA free-VRAM safety threshold."""
+    raw = os.environ.get("ATTS_GPU_MIN_FREE_MIB", str(DEFAULT_GPU_MIN_FREE_MIB))
+    try:
+        threshold = int(raw)
+    except ValueError:
+        LOGGER.warning(
+            "invalid ATTS_GPU_MIN_FREE_MIB=%r; using %s",
+            raw,
+            DEFAULT_GPU_MIN_FREE_MIB,
+        )
+        return DEFAULT_GPU_MIN_FREE_MIB
+    if threshold < 0:
+        LOGGER.warning(
+            "negative ATTS_GPU_MIN_FREE_MIB=%r; using %s",
+            raw,
+            DEFAULT_GPU_MIN_FREE_MIB,
+        )
+        return DEFAULT_GPU_MIN_FREE_MIB
+    return threshold
+
+
+def resolve_kokoro_device() -> str:
+    """Choose ``cuda`` or ``cpu`` from configuration and live VRAM headroom.
+
+    ``auto`` uses CUDA only when the installer-managed runtime is present and
+    the first NVIDIA GPU has at least ``ATTS_GPU_MIN_FREE_MIB`` free. Explicit
+    ``cuda`` bypasses the headroom guard but still requires the runtime files.
+    Any CUDA synthesis failure is retried on CPU by :func:`speak_with_kokoro`.
+    """
+    requested = os.environ.get("ATTS_DEVICE", "auto").strip().lower()
+    if requested == "gpu":
+        requested = "cuda"
+    if requested not in {"auto", "cuda", "cpu"}:
+        LOGGER.warning("invalid ATTS_DEVICE=%r; using auto", requested)
+        requested = "auto"
+    if requested == "cpu":
+        LOGGER.info("kokoro device=cpu reason=explicit")
+        return "cpu"
+    if not gpu_runtime_available():
+        LOGGER.info("kokoro device=cpu reason=gpu-runtime-missing")
+        return "cpu"
+    if requested == "cuda":
+        LOGGER.info("kokoro device=cuda reason=explicit")
+        return "cuda"
+    free_mib = gpu_free_memory_mib()
+    minimum_mib = gpu_min_free_mib()
+    if free_mib is not None and free_mib >= minimum_mib:
+        LOGGER.info(
+            "kokoro device=cuda reason=auto free_vram_mib=%s minimum_mib=%s",
+            free_mib,
+            minimum_mib,
+        )
+        return "cuda"
+    LOGGER.info(
+        "kokoro device=cpu reason=vram-headroom free_vram_mib=%s minimum_mib=%s",
+        free_mib,
+        minimum_mib,
+    )
+    return "cpu"
+
+
+def kokoro_subprocess_env(tts_dir: Path, device: str) -> dict[str, str]:
+    """Build the isolated environment for one Kokoro provider invocation.
+
+    Args:
+        tts_dir: Directory containing model assets and optional local libraries.
+        device: ``cuda`` to inject the locked GPU runtime, otherwise ``cpu``.
+    """
+    env = os.environ.copy()
+    env.pop("ONNX_PROVIDER", None)
+    local_lib = tts_dir / "lib"
+    library_dirs: list[str] = []
+    if local_lib.is_dir():
+        library_dirs.append(str(local_lib))
+    if device == "cuda":
+        runtime = gpu_runtime_dir()
+        python_overlay = runtime / "python"
+        env["ONNX_PROVIDER"] = "CUDAExecutionProvider"
+        existing_pythonpath = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = (
+            f"{python_overlay}:{existing_pythonpath}"
+            if existing_pythonpath
+            else str(python_overlay)
+        )
+        library_dirs.extend(str(path) for path in sorted(runtime.glob("nvidia/*/lib")))
+    existing_library_path = env.get("LD_LIBRARY_PATH", "")
+    if existing_library_path:
+        library_dirs.append(existing_library_path)
+    if library_dirs:
+        env["LD_LIBRARY_PATH"] = ":".join(library_dirs)
+    return env
+
+
 def speak_with_kokoro(
     text: str,
     voice: str,
@@ -753,38 +888,66 @@ def speak_with_kokoro(
             return True
         return play_audio(audio_path, ignore_silent=ignore_silent)
 
-    try:
-        input_path.write_text(text, encoding="utf-8")
-        env = os.environ.copy()
-        local_lib = tts_dir / "lib"
-        if local_lib.is_dir():
-            existing = env.get("LD_LIBRARY_PATH", "")
-            env["LD_LIBRARY_PATH"] = f"{local_lib}:{existing}" if existing else str(local_lib)
-        subprocess.run(
-            [
-                uvx,
-                "--from",
-                "kokoro-tts",
-                "kokoro-tts",
-                str(input_path),
-                str(raw_audio_path if abs(gain_db) >= 0.0005 else audio_path),
-                "--voice",
-                voice,
-                "--speed",
-                speed_text,
-            ],
-            cwd=tts_dir,
-            env=env,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        LOGGER.info(f"kokoro failed rc={exc.returncode}: {(exc.stderr or '').strip()}")
-        return False
-    except Exception as exc:
-        LOGGER.info(f"kokoro exception: {exc}")
+    command = [
+        uvx,
+        "--python",
+        "3.12",
+        "--from",
+        "kokoro-tts",
+        "kokoro-tts",
+        str(input_path),
+        str(raw_audio_path if abs(gain_db) >= 0.0005 else audio_path),
+        "--voice",
+        voice,
+        "--speed",
+        speed_text,
+    ]
+    selected_device = resolve_kokoro_device()
+    attempts = [selected_device]
+    if selected_device == "cuda":
+        attempts.append("cpu")
+    completed_device = ""
+    generated_path = raw_audio_path if abs(gain_db) >= 0.0005 else audio_path
+    for device in attempts:
+        try:
+            generated_path.unlink(missing_ok=True)
+            input_path.write_text(text, encoding="utf-8")
+            subprocess.run(
+                command,
+                cwd=tts_dir,
+                env=kokoro_subprocess_env(tts_dir, device),
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            LOGGER.info(
+                "kokoro failed device=%s rc=%s: %s",
+                device,
+                exc.returncode,
+                (exc.stderr or "").strip(),
+            )
+            if device == "cuda":
+                LOGGER.warning("kokoro CUDA synthesis failed; retrying on CPU")
+                continue
+            return False
+        except Exception as exc:
+            LOGGER.info("kokoro exception device=%s: %s", device, exc)
+            return False
+        if not generated_path.is_file() or generated_path.stat().st_size == 0:
+            LOGGER.warning(
+                "kokoro produced no audio device=%s path=%s",
+                device,
+                generated_path,
+            )
+            if device == "cuda":
+                LOGGER.warning("kokoro CUDA output missing; retrying on CPU")
+                continue
+            return False
+        completed_device = device
+        break
+    if not completed_device:
         return False
 
     if abs(gain_db) >= 0.0005:
@@ -796,7 +959,15 @@ def speak_with_kokoro(
                 LOGGER.info(f"audio fallback failed: {exc}")
                 return False
 
-    LOGGER.info(f"generated {audio_path} voice={voice} speed={speed_text} volume={volume_text} text={text!r}")
+    LOGGER.info(
+        "generated %s device=%s voice=%s speed=%s volume=%s text=%r",
+        audio_path,
+        completed_device,
+        voice,
+        speed_text,
+        volume_text,
+        text,
+    )
     if not play:
         return True
     return play_audio(audio_path, ignore_silent=ignore_silent)

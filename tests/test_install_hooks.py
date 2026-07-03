@@ -211,6 +211,58 @@ def test_lifecycle_voice_components_persist_independent_event_settings(tmp_path)
     assert "attention_voice\tAsk-for-further-changes voice announcements\ton" in listing.stdout
 
 
+def test_engine_installs_hash_locked_gpu_runtime_idempotently(tmp_path):
+    """NVIDIA installs sync the locked CUDA target once and preserve CPU fallback."""
+    home = tmp_path / "home"
+    home.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv_log = tmp_path / "uv.log"
+    uv = bin_dir / "uv"
+    uv.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$UV_CALL_LOG\"\n"
+        "target=''\n"
+        "while [ $# -gt 0 ]; do\n"
+        "  if [ \"$1\" = '--target' ]; then target=$2; break; fi\n"
+        "  shift\n"
+        "done\n"
+        "mkdir -p \"$target/onnxruntime\" \"$target/nvidia/cudnn/lib\"\n",
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+    nvidia_smi = bin_dir / "nvidia-smi"
+    nvidia_smi.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    nvidia_smi.chmod(0o755)
+    env = {
+        "HOME": str(home),
+        "TTS_TARGET_HOME": str(home),
+        "TTS_LOG_DIR": str(tmp_path / "install-log"),
+        "UV_CALL_LOG": str(uv_log),
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+    }
+
+    for _ in range(2):
+        result = subprocess.run(
+            ["bash", str(ROOT / "install.sh"), "--select", "engine"],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+
+    runtime = home / ".local/share/codex-claude-tts-announcements/gpu-runtime"
+    assert (runtime / "onnxruntime").is_dir()
+    assert (runtime / "nvidia/cudnn/lib").is_dir()
+    assert (runtime / "python/onnxruntime").exists()
+    assert "pip sync --require-hashes --target" in uv_log.read_text(encoding="utf-8")
+    assert len(uv_log.read_text(encoding="utf-8").splitlines()) == 1
+    installed_requirements = runtime.parent / "requirements-gpu.txt"
+    assert "--hash=sha256:" in installed_requirements.read_text(encoding="utf-8")
+
+
 def test_uninstalling_hook_files_keeps_engine_logging_dependency(tmp_path):
     """Removing notify hooks must leave a separately selected agent-tts usable."""
     home = tmp_path / "home"

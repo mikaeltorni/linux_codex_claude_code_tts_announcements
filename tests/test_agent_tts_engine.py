@@ -26,6 +26,9 @@ _ATTS_ENV = (
     "ATTS_QWEN_VOICE",
     "ATTS_CLINE_VOICE",
     "ATTS_MODEL_DIR",
+    "ATTS_DEVICE",
+    "ATTS_GPU_RUNTIME_DIR",
+    "ATTS_GPU_MIN_FREE_MIB",
     "ATTS_ANNOUNCE_WORKSPACE",
     "ATTS_NO_AUDIO",
     "AGENT_COMMAND_CENTER_TTS_SPEED",
@@ -208,6 +211,78 @@ def test_cline_and_claude_reuse_shared_codex_kokoro_assets(engine, monkeypatch, 
 
     assert engine.resolve_tts_dir(tmp_path / ".cline") == shared
     assert engine.resolve_tts_dir(tmp_path / ".claude") == shared
+
+
+def test_auto_device_uses_installed_cuda_runtime_with_vram_headroom(
+    engine, monkeypatch, tmp_path
+):
+    """Auto mode selects CUDA only when its runtime and free VRAM are ready."""
+    runtime = tmp_path / "gpu-runtime"
+    (runtime / "onnxruntime").mkdir(parents=True)
+    (runtime / "python/onnxruntime").mkdir(parents=True)
+    (runtime / "nvidia/cudnn/lib").mkdir(parents=True)
+    monkeypatch.setenv("ATTS_GPU_RUNTIME_DIR", str(runtime))
+    monkeypatch.setattr(engine, "gpu_free_memory_mib", lambda: 1536)
+
+    assert engine.resolve_kokoro_device() == "cuda"
+    env = engine.kokoro_subprocess_env(Path("/models"), "cuda")
+    assert env["ONNX_PROVIDER"] == "CUDAExecutionProvider"
+    assert env["PYTHONPATH"].split(":", 1)[0] == str(runtime / "python")
+    assert str(runtime / "nvidia/cudnn/lib") in env["LD_LIBRARY_PATH"]
+
+
+def test_auto_device_keeps_cpu_when_vram_headroom_is_too_small(
+    engine, monkeypatch, tmp_path
+):
+    """Auto mode must not contend with LM Studio below the safety threshold."""
+    runtime = tmp_path / "gpu-runtime"
+    (runtime / "onnxruntime").mkdir(parents=True)
+    (runtime / "python/onnxruntime").mkdir(parents=True)
+    monkeypatch.setenv("ATTS_GPU_RUNTIME_DIR", str(runtime))
+    monkeypatch.setenv("ATTS_GPU_MIN_FREE_MIB", "1024")
+    monkeypatch.setattr(engine, "gpu_free_memory_mib", lambda: 900)
+
+    assert engine.resolve_kokoro_device() == "cpu"
+
+
+def test_forced_cpu_does_not_inject_cuda_runtime(engine, monkeypatch, tmp_path):
+    """ATTS_DEVICE=cpu remains an explicit escape hatch on NVIDIA systems."""
+    monkeypatch.setenv("ATTS_DEVICE", "cpu")
+    monkeypatch.setenv("ATTS_GPU_RUNTIME_DIR", str(tmp_path / "gpu-runtime"))
+
+    assert engine.resolve_kokoro_device() == "cpu"
+    env = engine.kokoro_subprocess_env(Path("/models"), "cpu")
+    assert "ONNX_PROVIDER" not in env
+
+
+def test_cuda_missing_output_retries_kokoro_once_on_cpu(
+    engine, monkeypatch, tmp_path
+):
+    """A zero-exit CUDA run without audio must retry the CPU provider."""
+    tts_dir = tmp_path / "tts"
+    tts_dir.mkdir()
+    (tts_dir / "kokoro-v1.0.onnx").write_bytes(b"model")
+    (tts_dir / "voices-v1.0.bin").write_bytes(b"voices")
+    monkeypatch.setattr(engine, "resolve_uvx", lambda: "/usr/bin/uvx")
+    monkeypatch.setattr(engine, "resolve_tts_dir", lambda _home: tts_dir)
+    monkeypatch.setattr(engine, "resolve_kokoro_device", lambda: "cuda")
+    monkeypatch.setattr(engine, "current_tts_volume_percent", lambda: 100.0)
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args[0], kwargs["env"]))
+        if len(calls) == 2:
+            Path(args[0][7]).write_bytes(b"wav")
+        return engine.subprocess.CompletedProcess(args[0], 0)
+
+    monkeypatch.setattr(engine.subprocess, "run", fake_run)
+
+    assert engine.speak_with_kokoro(
+        "hello", "af_sky", tmp_path, play=False
+    ) is True
+    assert calls[0][0][1:3] == ["--python", "3.12"]
+    assert calls[0][1]["ONNX_PROVIDER"] == "CUDAExecutionProvider"
+    assert "ONNX_PROVIDER" not in calls[1][1]
 
 
 def test_workspace_suffix_disabled(engine):
