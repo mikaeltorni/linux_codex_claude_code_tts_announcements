@@ -80,6 +80,30 @@ def cmd_clarify(args) -> int:
     return 0
 
 
+def cmd_prewarm(args) -> int:
+    """Warm the Kokoro synthesis path so the first real announcement is fast.
+
+    Every announcement is a fresh ``uvx`` subprocess that re-imports Kokoro and
+    reloads the ONNX model, so the first synthesis after boot pays a cold
+    ~6-second startup (uvx resolution, Python import, model load, page-cache
+    misses) regardless of CPU vs. CUDA — GPU does not accelerate a workload that
+    short. Running one silent synthesis at login moves that one-time cost off
+    the critical path so the first agent turn speaks without stalling.
+
+    Runs with playback disabled and always exits 0: a boot/login service must
+    never fail (or make noise) just because warming did not complete.
+    """
+    voice = getattr(args, "voice", "") or engine.voice_for_kind("claude", os.environ)
+    text = "Agent text to speech ready."
+    try:
+        warmed = engine.speak_with_kokoro(text, voice, _codex_home(args), play=False, ignore_silent=True)
+    except Exception as exc:  # a boot service must survive any synthesis failure
+        engine.LOGGER.info("prewarm failed voice=%s: %s", voice, exc)
+        return 0
+    engine.LOGGER.info("prewarm %s voice=%s", "warmed" if warmed else "skipped", voice)
+    return 0
+
+
 def cmd_speed(args) -> int:
     """Read or update the persisted TTS speed multiplier."""
     value = getattr(args, "value", None)
@@ -192,6 +216,11 @@ def build_parser() -> argparse.ArgumentParser:
     silent.add_argument("--voice", default=default_voice)
     silent.add_argument("--codex-home", default=default_home)
     silent.set_defaults(func=cmd_silent)
+
+    prewarm = sub.add_parser("prewarm", help="warm the synthesis path at boot (no audio)")
+    prewarm.add_argument("--voice", default=default_voice)
+    prewarm.add_argument("--codex-home", default=default_home)
+    prewarm.set_defaults(func=cmd_prewarm)
 
     speed = sub.add_parser("speed", help="read/update the agent TTS speed multiplier")
     speed.add_argument("value", nargs="?", default=None, help="positive speed multiplier, or status")

@@ -19,6 +19,7 @@ ISC_REPO_LABEL="Codex/Claude Code/Cline/Grok TTS announcements"
 ISC_COMPONENTS=(
   "engine|Agent TTS (agent-tts) speech engine|on|install_agent_tts_engine|detect_engine|uninstall_engine|Core"
   "hook_files|TTS notify hook files|on|install_tts_hook_files|detect_hook_files|uninstall_hook_files|Core"
+  "boot_prewarm|Boot-time Kokoro prewarm (systemd user service)|on|install_boot_prewarm|detect_boot_prewarm|uninstall_boot_prewarm|Core"
   "start_voice|Start voice announcements|on|install_start_voice|detect_start_voice|uninstall_start_voice|Voice events"
   "finish_voice|End voice announcements|on|install_finish_voice|detect_finish_voice|uninstall_finish_voice|Voice events"
   "attention_voice|Ask-for-further-changes voice announcements|on|install_attention_voice|detect_attention_voice|uninstall_attention_voice|Voice events"

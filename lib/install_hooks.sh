@@ -40,6 +40,11 @@ tts_bin_dir() {
   printf '%s\n' "${TTS_BIN_DIR:-$(tts_target_home)/.local/bin}"
 }
 
+# Resolve the systemd user unit directory (override for clean-home tests).
+tts_systemd_user_dir() {
+  printf '%s\n' "${TTS_SYSTEMD_USER_DIR:-$(tts_target_home)/.config/systemd/user}"
+}
+
 # Resolve uv without assuming the target user's local bin directory is on PATH.
 tts_resolve_uv() {
   local candidate
@@ -297,6 +302,42 @@ configure_cline_user_prompt_hook()  { configure_cline_event_hook UserPromptSubmi
 configure_cline_pre_tool_use_hook() { configure_cline_event_hook PreToolUse ask_question; }
 
 ###############################################################################
+# Install a systemd --user oneshot that warms Kokoro at login so the first agent
+# announcement does not pay the cold ~6s uvx/model-load startup. Enabling is
+# best-effort: a console/clean-home install without a live user manager still
+# lands the unit and succeeds, and the unit runs at the next graphical login.
+install_boot_prewarm() {
+  ensure_tts_core
+  local unit_dir unit bin
+  unit_dir="$(tts_systemd_user_dir)"
+  bin="$(tts_bin_dir)"
+  mkdir -p "$unit_dir"
+  unit="$unit_dir/agent-tts-prewarm.service"
+  cat >"$unit" <<EOF
+[Unit]
+Description=Warm Agent TTS (Kokoro) synthesis so the first announcement is fast
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=$bin/agent-tts prewarm
+# Warming is best-effort; never let a slow/failed synthesis stall the session.
+TimeoutStartSec=180
+Nice=10
+
+[Install]
+WantedBy=default.target
+EOF
+  chmod 0644 "$unit"
+  if [ -z "${TTS_SKIP_SYSTEMD:-}" ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+    systemctl --user enable --now agent-tts-prewarm.service >/dev/null 2>&1 \
+      || systemctl --user enable agent-tts-prewarm.service >/dev/null 2>&1 || true
+  fi
+  tts_msg "Installed boot prewarm service to $unit"
+}
+
+###############################################################################
 # Detection and uninstall (component lifecycle)
 ###############################################################################
 # detect_* report live state for --detect; uninstall_* reverse each component.
@@ -310,6 +351,7 @@ tts_config_has() {
 }
 
 detect_engine()       { [ -e "$(tts_bin_dir)/agent-tts" ] || [ -f "$(tts_install_root)/scripts/agent-tts" ]; }
+detect_boot_prewarm() { [ -f "$(tts_systemd_user_dir)/agent-tts-prewarm.service" ]; }
 detect_hook_files()   { [ -f "$(tts_install_root)/scripts/notify_agent.py" ]; }
 detect_start_voice()     { [ "$(tts_event_setting ATTS_ANNOUNCE_START)" = 1 ]; }
 detect_finish_voice()    { [ "$(tts_event_setting ATTS_ANNOUNCE_FINISH)" = 1 ]; }
@@ -368,6 +410,18 @@ uninstall_engine() {
          "$(tts_install_root)/scripts/agent-tts" \
          "$(tts_install_root)/gpu-runtime"
   rm -f "$(tts_install_root)/requirements-gpu.txt"
+}
+uninstall_boot_prewarm() {
+  tts_msg "Removing boot prewarm service"
+  local unit
+  unit="$(tts_systemd_user_dir)/agent-tts-prewarm.service"
+  if [ -z "${TTS_SKIP_SYSTEMD:-}" ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl --user disable --now agent-tts-prewarm.service >/dev/null 2>&1 || true
+  fi
+  rm -f "$unit"
+  if [ -z "${TTS_SKIP_SYSTEMD:-}" ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+  fi
 }
 uninstall_start_voice()     { tts_set_event_setting ATTS_ANNOUNCE_START 0; }
 uninstall_finish_voice()    { tts_set_event_setting ATTS_ANNOUNCE_FINISH 0; }

@@ -9,6 +9,15 @@
       "uninstall": 0,
       "workspace": 0
     },
+    "boot_prewarm": {
+      "config_value": "",
+      "favorite": 0,
+      "on": 1,
+      "startup": 0,
+      "sticky": 0,
+      "uninstall": 0,
+      "workspace": 0
+    },
     "claude_notification": {
       "config_value": "",
       "favorite": 0,

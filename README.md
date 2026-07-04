@@ -93,6 +93,21 @@ Tunables (env overrides win over the persisted values):
   synthesis error is logged and retried once on CPU.
 - `ATTS_GPU_MIN_FREE_MIB` — change the auto-mode free-VRAM guard (default
   `1024`). `ATTS_GPU_RUNTIME_DIR` overrides the installer-managed runtime path.
+  Note: because every announcement is a fresh `uvx`/ONNX subprocess, a
+  one-sentence clip is dominated by cold process and model-load startup (~6 s),
+  not inference — CUDA does not make short announcements meaningfully faster. GPU
+  mainly helps longer text; the boot prewarm below is what removes the first-run
+  stall.
+
+### Boot prewarm (`boot_prewarm` component)
+
+The `boot_prewarm` component installs a `systemd --user` oneshot,
+`agent-tts-prewarm.service` (`WantedBy=default.target`), that runs one silent
+`agent-tts prewarm` at login. This warms the `uvx` environment, the ONNX model,
+and the OS page cache before the first agent turn speaks, so the first
+announcement no longer pays the cold ~6 s startup on the critical path.
+Warming is best-effort (`Nice=10`, no audio, always exits 0) and never stalls
+the session. Run `agent-tts prewarm` by hand to warm the current shell.
 - `ATTS_ANNOUNCE_WORKSPACE=0` — disable the spoken workspace suffix.
 - `ATTS_ANNOUNCE_START`, `ATTS_ANNOUNCE_FINISH`, and
   `ATTS_ANNOUNCE_ATTENTION` — override the independently installed lifecycle

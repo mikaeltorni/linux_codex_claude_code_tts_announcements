@@ -150,6 +150,53 @@ def test_single_hook_component_installs_core_and_only_that_hook(tmp_path):
     assert not codex_config.exists()
 
 
+def test_boot_prewarm_installs_enabled_systemd_user_unit(tmp_path):
+    """The boot prewarm component lands an enable-ready systemd --user unit.
+
+    The unit must self-install the core (so `agent-tts prewarm` exists), target
+    the installed launcher, and be wired into the default login target. systemctl
+    is skipped here so the test never touches the real user manager; uninstall
+    must remove the unit again.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    unit_dir = home / ".config/systemd/user"
+    env = {
+        "HOME": str(home),
+        "TTS_TARGET_HOME": str(home),
+        "TTS_SYSTEMD_USER_DIR": str(unit_dir),
+        "TTS_SKIP_SYSTEMD": "1",
+        "TTS_LOG_DIR": str(tmp_path / "install-log"),
+        "PATH": "/usr/bin:/bin",
+    }
+
+    install = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--select", "boot_prewarm"],
+        cwd=ROOT, env=env, text=True, capture_output=True, check=False,
+    )
+    assert install.returncode == 0, install.stderr
+
+    unit = unit_dir / "agent-tts-prewarm.service"
+    launcher = home / ".local/bin/agent-tts"
+    assert launcher.exists(), "core engine must self-install for prewarm to run"
+    body = unit.read_text(encoding="utf-8")
+    assert f"ExecStart={launcher} prewarm" in body
+    assert "WantedBy=default.target" in body
+
+    detect = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--detect"],
+        cwd=ROOT, env=env, text=True, capture_output=True, check=False,
+    )
+    assert "boot_prewarm\tinstalled" in detect.stdout
+
+    remove = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--uninstall=boot_prewarm"],
+        cwd=ROOT, env=env, text=True, capture_output=True, check=False,
+    )
+    assert remove.returncode == 0, remove.stderr
+    assert not unit.exists()
+
+
 def test_lifecycle_voice_components_persist_independent_event_settings(tmp_path):
     """The standalone installer exposes independent start/end/attention toggles."""
     home = tmp_path / "home"
