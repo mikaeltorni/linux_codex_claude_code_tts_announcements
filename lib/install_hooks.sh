@@ -356,28 +356,45 @@ detect_hook_files()   { [ -f "$(tts_install_root)/scripts/notify_agent.py" ]; }
 detect_start_voice()     { [ "$(tts_event_setting ATTS_ANNOUNCE_START)" = 1 ]; }
 detect_finish_voice()    { [ "$(tts_event_setting ATTS_ANNOUNCE_FINISH)" = 1 ]; }
 detect_attention_voice() { [ "$(tts_event_setting ATTS_ANNOUNCE_ATTENTION)" = 1 ]; }
-detect_codex_notify() { tts_config_has "${CODEX_CONFIG_FILE:-$(tts_target_home)/.codex/config.toml}"; }
+# Match the current codex marker rather than the bare notify_agent.py reference:
+# a config written by the older "BEGIN CODEX NOTIFY" block also contains
+# notify_agent.py, so the generic check reported it "installed" and the runtime
+# skipped configure_codex_notify_block, leaving the old block unmigrated on a
+# plain re-install. Codex (unlike Grok) never strips our comment markers, so the
+# marker is a reliable install signal.
+detect_codex_notify() {
+  local f="${CODEX_CONFIG_FILE:-$(tts_target_home)/.codex/config.toml}"
+  [ -f "$f" ] && grep -q 'BEGIN TTS ANNOUNCEMENTS NOTIFY' "$f" 2>/dev/null
+}
+# Grok rewrites its config.toml and may strip our comment markers, so detection
+# stays on the broader notify_agent.py reference (see tts_config_has).
 detect_grok_notify()  { tts_config_has "${GROK_CONFIG_FILE:-$(tts_target_home)/.grok/config.toml}"; }
 detect_codex_attention() {
   local f="${CODEX_HOOKS_FILE:-$(tts_target_home)/.codex/hooks.json}"
   [ -f "$f" ] && grep -q 'PermissionRequest' "$f" 2>/dev/null && grep -q 'notify_agent.py' "$f" 2>/dev/null
 }
-# A Claude event hook is present when settings.json registers our command under
-# that event. The pruning is event-specific, so detection greps the event name.
+# A Claude event hook is present when settings.json registers *our managed*
+# command under that event. Match the current install-root notify_agent.py path
+# rather than a bare notify_agent.py reference: a settings file carrying an older
+# hook (e.g. a hand-written or previously-relocated "/old/notify_agent.py")
+# otherwise reads as installed, so the runtime skips the event and never prunes
+# and re-registers it. The pruning is event-specific, so detection greps the
+# event name.
 _tts_claude_has_event() {
   local event="$1" f="${CLAUDE_SETTINGS_FILE:-$(tts_target_home)/.claude/settings.json}"
   [ -f "$f" ] || return 1
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 - "$f" "$event" <<'PY'
+  local managed; managed="$(tts_install_root)/scripts/notify_agent.py"
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 - "$f" "$event" "$managed" <<'PY'
 import json, sys
 try:
     data = json.load(open(sys.argv[1]))
 except Exception:
     sys.exit(1)
-event = sys.argv[2]
+event, managed = sys.argv[2], sys.argv[3]
 entries = (data.get("hooks") or {}).get(event) or []
 for entry in entries if isinstance(entries, list) else []:
     for h in (entry.get("hooks") or []) if isinstance(entry, dict) else []:
-        if isinstance(h, dict) and "notify_agent.py" in str(h.get("command", "")):
+        if isinstance(h, dict) and managed in str(h.get("command", "")):
             sys.exit(0)
 sys.exit(1)
 PY
