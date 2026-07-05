@@ -32,8 +32,11 @@ This repository has two layers with different dependencies:
   loaded from a sibling checkout when present, otherwise downloaded on demand.
 
 Agent Command Center delegates all speech to this repository's `agent-tts`
-engine. The desktop setup chain installs this repository directly, so its own
-submenu controls the engine, voice categories, and hooks before ACC starts.
+engine and installs it through its recommended (default-on) `tts_announcements`
+component: the master setup chain clones this repository first and Agent Command
+Center then configures the engine, voice categories, and hooks as part of its
+own install. Installing this repository on its own works too — its `install.sh`
+sets up the engine and hooks independently.
 
 See the full cross-repository map in
 [installation_scripts/DEPENDENCIES.md](https://github.com/mikaeltorni/installation_scripts/blob/master/DEPENDENCIES.md).
