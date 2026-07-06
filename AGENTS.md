@@ -21,6 +21,12 @@ The engine is fully standalone. The notify hooks (Codex, Claude Code, Cline,
 Grok) delegate orchestration to ACC's `codex-agent-tracker` so a finish label is
 summarized once and shared with the terminal title, but they degrade to a no-op
 when the tracker is absent — nothing here may become a hard dependency on ACC.
+Feature labels are keyed per session: ACC launchers export
+`CODEX_AGENT_FEATURE_KEY`, and hooks prefer that inherited key over the hook
+payload's session id (`runtime_feature_key` in `notify.py`) so a tracked
+session's title updates and its tracker-driven finish announcement resolve the
+same stored label; concurrent sessions in one project must never speak each
+other's task. Untracked launches keep the payload session id as the key.
 The framework dependency (`linux_installation_scripts_functions`) is soft
 (sibling checkout or on-demand download). Grok keeps a distinct voice isolated
 from Qwen; preserve that separation when touching voice defaults.

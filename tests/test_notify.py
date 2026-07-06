@@ -495,3 +495,35 @@ def test_main_routes_grok_flag_to_env_handler(monkeypatch):
     monkeypatch.setenv("GROK_EVENT", "turn_complete")
     assert notify.main(["notify_agent.py", "--grok"]) == 0
     assert calls[-1][:3] == ["announce", "--event", "finish"]
+
+
+def test_claude_hooks_prefer_the_tracker_launch_feature_key(monkeypatch, tmp_path):
+    """Tracked launches key title/finish labels by the exported launch key.
+
+    ACC launchers export CODEX_AGENT_FEATURE_KEY; hooks inherit it from the
+    agent process. Using it instead of the Claude session id keeps the title
+    hook and the tracker's finish announcement on the same stored feature
+    label, so a tracked session's finish never speaks a label another
+    concurrent session stored (the "done with <other session's task>" bug).
+    """
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "reconnect keyboards"}}),
+        encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+    monkeypatch.setenv("CODEX_AGENT_FEATURE_KEY", "launch-777")
+
+    common = {
+        "session_id": "claude-session-9",
+        "cwd": "/repo/demo",
+        "transcript_path": str(transcript),
+    }
+    assert notify.handle_claude(
+        {**common, "hook_event_name": "UserPromptSubmit", "prompt": "reconnect keyboards"}
+    ) == 0
+    assert notify.handle_claude({**common, "hook_event_name": "Stop"}) == 0
+
+    for args in calls:
+        assert args[args.index("--feature-key") + 1] == "launch-777"

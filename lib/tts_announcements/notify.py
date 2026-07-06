@@ -187,6 +187,28 @@ def parse_payload(argv: list[str], stdin_text: str | None = None) -> dict[str, A
     return payload if isinstance(payload, dict) else {}
 
 
+def runtime_feature_key(fallback: str = "") -> str:
+    """Return the launch-scoped feature-label key for this agent process.
+
+    Tracker-launched agents (``ca``/``cca``/…) export ``CODEX_AGENT_FEATURE_KEY``
+    at launch, and hooks run as children of the agent process, so they inherit
+    it. Preferring that key over the hook payload's session id keeps the title
+    hook and the tracker's finish announcement on the *same* stored feature
+    label — otherwise a tracked session's title updates land under the Claude
+    session id while the tracker's finish lookup uses the launch key, and the
+    announcement falls back to a label another concurrent session may have
+    written (speaking the wrong task).
+
+    Args:
+        fallback: Key to use for untracked launches (typically the hook
+            payload's session id), where no launch key is exported.
+
+    Returns:
+        The feature-label key to scope title/finish label storage with.
+    """
+    return normalize_text(os.environ.get("CODEX_AGENT_FEATURE_KEY", "")) or fallback
+
+
 def normalize_text(value: str) -> str:
     """Collapse repeated whitespace for spoken labels.
 
@@ -514,7 +536,7 @@ def handle_claude(payload: dict[str, Any]) -> int:
     """
     event = payload.get("hook_event_name", "")
     context = context_for(payload, "claude")
-    feature_key = normalize_text(str(payload.get("session_id", "")))
+    feature_key = runtime_feature_key(normalize_text(str(payload.get("session_id", ""))))
     log.info(
         f"Claude event={event} project={context.project_name} "
         f"session_scoped={bool(feature_key)} cwd={payload.get('cwd')}",
@@ -656,7 +678,11 @@ def handle_grok(environ: dict[str, str] | None = None) -> int:
     env = os.environ if environ is None else environ
     event = normalize_text(env.get("GROK_EVENT", "")).casefold()
     message = normalize_text(env.get("GROK_MESSAGE", ""))
-    session_id = normalize_text(env.get("GROK_SESSION_ID", ""))
+    # Prefer the tracker launch key (see runtime_feature_key) from the same
+    # environment mapping tests inject, falling back to Grok's own session id.
+    session_id = normalize_text(env.get("CODEX_AGENT_FEATURE_KEY", "")) or normalize_text(
+        env.get("GROK_SESSION_ID", "")
+    )
     try:
         cwd = os.getcwd()
     except OSError:
