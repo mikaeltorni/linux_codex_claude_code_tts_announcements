@@ -322,8 +322,11 @@ def test_context_uses_claude_code_tts_voice_alias(monkeypatch):
 def test_tracker_managed_lifecycle_hooks_do_not_duplicate_voices(monkeypatch):
     """ACC-managed Claude/Cline/Grok children skip native start/end hook speech."""
     calls = []
+    tracker_calls = []
     monkeypatch.setenv("ATTS_LIFECYCLE_TRACKED", "1")
+    monkeypatch.setenv("CODEX_AGENT_RUN_ID", "claude-1-1")
     monkeypatch.setattr(notify, "announce", lambda *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(notify, "run_tracker", lambda args: tracker_calls.append(args) or True)
 
     notify.handle_claude({"hook_event_name": "SessionStart", "source": "startup"})
     notify.handle_claude({"hook_event_name": "Stop"})
@@ -333,6 +336,35 @@ def test_tracker_managed_lifecycle_hooks_do_not_duplicate_voices(monkeypatch):
     notify.handle_grok({"GROK_EVENT": "turn_complete"})
 
     assert calls == []
+    # The per-turn Claude Stop is forwarded to the tracker instead of spoken
+    # natively, so tracked interactive sessions still announce each finish.
+    assert tracker_calls == [["turn-complete", "--status", "0", "--token", "claude-1-1"]]
+
+
+def test_tracker_managed_claude_stop_falls_back_without_run_token(monkeypatch):
+    """A tracked Claude Stop with no run token still speaks a finish natively."""
+    calls = []
+    monkeypatch.setenv("ATTS_LIFECYCLE_TRACKED", "1")
+    monkeypatch.delenv("CODEX_AGENT_RUN_ID", raising=False)
+    monkeypatch.setattr(notify, "announce", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    notify.handle_claude({"hook_event_name": "Stop"})
+
+    assert len(calls) == 1
+    assert calls[0][0][0] == "finish"
+
+
+def test_tracker_managed_claude_prompt_submit_forwards_turn_start(monkeypatch):
+    """Each tracked user prompt re-arms the tracker's finish announcement."""
+    tracker_calls = []
+    monkeypatch.setenv("ATTS_LIFECYCLE_TRACKED", "1")
+    monkeypatch.setenv("CODEX_AGENT_RUN_ID", "claude-1-1")
+    monkeypatch.setattr(notify, "run_tracker", lambda args: tracker_calls.append(args) or True)
+    monkeypatch.setattr(notify, "update_title", lambda *args, **kwargs: True)
+
+    notify.handle_claude({"hook_event_name": "UserPromptSubmit", "prompt": "next task"})
+
+    assert tracker_calls == [["turn-start", "--token", "claude-1-1"]]
 
 
 def test_context_uses_qwen_variables_for_direct_qwen_hook(monkeypatch):

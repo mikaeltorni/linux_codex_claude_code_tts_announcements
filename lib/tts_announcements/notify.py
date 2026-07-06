@@ -452,6 +452,20 @@ def notify_turn_complete(status: int = 0) -> bool:
     return run_tracker(["turn-complete", "--status", str(status), "--token", token])
 
 
+def notify_turn_start() -> bool:
+    """Tell the tracker that a new turn started in a tracked session.
+
+    Returns:
+        bool: ``True`` when the tracker reported success. ``False`` when no
+        ``CODEX_AGENT_RUN_ID`` token is set or the tracker failed.
+    """
+    token = os.environ.get("CODEX_AGENT_RUN_ID", "")
+    if not token:
+        log.debug("no run token; skipping turn-start", component=LOG_COMPONENT)
+        return False
+    return run_tracker(["turn-start", "--token", token])
+
+
 def transcript_prompt(transcript_path: str) -> str:
     """Return the latest real user prompt from a Claude transcript JSONL.
 
@@ -544,7 +558,19 @@ def handle_claude(payload: dict[str, Any]) -> int:
     )
 
     if lifecycle_is_tracker_managed() and event in {"SessionStart", "Stop", "SubagentStop"}:
-        log.debug(f"skip tracker-managed Claude lifecycle event={event}", component=LOG_COMPONENT)
+        # The ACC launcher bracket only covers process start/exit; the per-turn
+        # Stop of an interactive session is invisible to the tracker (its
+        # session watch reads Codex-family JSONL, never Claude transcripts).
+        # Forward Stop as a turn completion so the tracker speaks the finish;
+        # only fall back to speaking directly when no run token exists.
+        if event in {"Stop", "SubagentStop"} and not notify_turn_complete():
+            task = transcript_prompt(str(payload.get("transcript_path", "")))
+            announce("finish", context, task_description=task, feature_key=feature_key)
+        else:
+            log.debug(
+                f"tracker-managed Claude lifecycle event={event} delegated",
+                component=LOG_COMPONENT,
+            )
         return 0
 
     if event == "SessionStart":
@@ -561,6 +587,10 @@ def handle_claude(payload: dict[str, Any]) -> int:
         task = transcript_prompt(str(payload.get("transcript_path", "")))
         announce("finish", context, task_description=task, feature_key=feature_key)
     elif event == "UserPromptSubmit":
+        if lifecycle_is_tracker_managed():
+            # Re-arm the tracker's per-turn finish dedupe (and let it speak a
+            # follow-up "started") so the next Stop announces again.
+            notify_turn_start()
         update_title(str(payload.get("prompt", "")), context, feature_key=feature_key)
     elif event in {"Notification", "PermissionRequest"}:
         raw_message = normalize_text(str(payload.get("message", "")))
