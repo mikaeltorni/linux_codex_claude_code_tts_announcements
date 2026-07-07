@@ -248,6 +248,7 @@ def voice_label(agent_display: str = "", label: str = "", kind: str = "") -> str
         "cline": "cline",
         "grok": "grok",
         "openrouter": "OpenRouter",
+        "nvidia": "NVIDIA",
     }
     if kind in canonical:
         return canonical[kind]
@@ -274,6 +275,8 @@ def codex_home_for_kind(kind: str, env: dict[str, str]) -> str:
         return str(Path.home() / ".cline")
     if kind == "openrouter":
         return str(Path.home() / ".codex-openrouter")
+    if kind == "nvidia":
+        return str(Path.home() / ".codex-nvidia")
     return str(Path.home() / ".codex")
 
 
@@ -595,6 +598,15 @@ def voice_for_kind(kind: str, env: dict[str, str]) -> str:
             configured("ATTS_OPENROUTER_VOICE")
             or configured("OPENROUTER_CODEX_TTS_VOICE")
             or "af_jessica"
+        )
+    if kind == "nvidia":
+        # NVIDIA Codex (na/nvi) gets its own reserved voice. Like OpenRouter, it
+        # ignores the generic CODEX__TTS_VOICE export so a stale shell-wide
+        # Local/Qwen default (af_heart) cannot override the reserved default.
+        return (
+            configured("ATTS_NVIDIA_VOICE")
+            or configured("NVIDIA_CODEX_TTS_VOICE")
+            or "af_nicole"
         )
     return (
         configured("ATTS_CODEX_VOICE")
