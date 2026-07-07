@@ -126,6 +126,7 @@ def test_voice_for_kind_precedence(engine, monkeypatch):
     assert engine.voice_for_kind("qwen", {}) == "af_heart"
     assert engine.voice_for_kind("cline", {}) == "af_aoede"
     assert engine.voice_for_kind("grok", {}) == "af_kore"
+    assert engine.voice_for_kind("openrouter", {}) == "af_jessica"
     assert engine.voice_for_kind("codex", {"ATTS_VOICE": "af_custom"}) == "af_custom"
     assert engine.voice_for_kind("codex", {"CODEX__TTS_VOICE": "af_legacy"}) == "af_legacy"
 
@@ -165,6 +166,8 @@ def test_voice_for_kind_supports_runtime_specific_variables(engine):
     assert engine.voice_for_kind("cline", {"ATTS_CLINE_VOICE": "af_cline"}) == "af_cline"
     assert engine.voice_for_kind("cline", {"CLINE_TTS_VOICE": "af_legacy_cline"}) == "af_legacy_cline"
     assert engine.voice_for_kind("codex", {"CODEX_TTS_VOICE": "af_legacy_codex"}) == "af_legacy_codex"
+    assert engine.voice_for_kind("openrouter", {"ATTS_OPENROUTER_VOICE": "af_or"}) == "af_or"
+    assert engine.voice_for_kind("openrouter", {"OPENROUTER_CODEX_TTS_VOICE": "af_legacy_or"}) == "af_legacy_or"
     assert engine.voice_for_kind("qwen", {"QWEN_CODEX_TTS_VOICE": "af_legacy_qwen"}) == "af_legacy_qwen"
 
 
