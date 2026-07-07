@@ -127,7 +127,7 @@ def test_voice_for_kind_precedence(engine, monkeypatch):
     assert engine.voice_for_kind("cline", {}) == "af_aoede"
     assert engine.voice_for_kind("grok", {}) == "af_kore"
     assert engine.voice_for_kind("openrouter", {}) == "af_jessica"
-    assert engine.voice_for_kind("nvidia", {}) == "af_nicole"
+    assert engine.voice_for_kind("nvidia", {}) == "af_sarah"
     assert engine.voice_for_kind("codex", {"ATTS_VOICE": "af_custom"}) == "af_custom"
     assert engine.voice_for_kind("codex", {"CODEX__TTS_VOICE": "af_legacy"}) == "af_legacy"
 

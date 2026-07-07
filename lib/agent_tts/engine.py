@@ -606,7 +606,7 @@ def voice_for_kind(kind: str, env: dict[str, str]) -> str:
         return (
             configured("ATTS_NVIDIA_VOICE")
             or configured("NVIDIA_CODEX_TTS_VOICE")
-            or "af_nicole"
+            or "af_sarah"
         )
     return (
         configured("ATTS_CODEX_VOICE")
