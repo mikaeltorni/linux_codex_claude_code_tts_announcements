@@ -364,7 +364,9 @@ def test_tracker_managed_claude_prompt_submit_forwards_turn_start(monkeypatch):
 
     notify.handle_claude({"hook_event_name": "UserPromptSubmit", "prompt": "next task"})
 
-    assert tracker_calls == [["turn-start", "--token", "claude-1-1"]]
+    assert tracker_calls == [
+        ["turn-start", "--token", "claude-1-1", "--prompt", "next task"]
+    ]
 
 
 def test_context_uses_qwen_variables_for_direct_qwen_hook(monkeypatch):

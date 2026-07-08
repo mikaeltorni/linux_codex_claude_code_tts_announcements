@@ -452,8 +452,12 @@ def notify_turn_complete(status: int = 0) -> bool:
     return run_tracker(["turn-complete", "--status", str(status), "--token", token])
 
 
-def notify_turn_start() -> bool:
+def notify_turn_start(prompt: str = "") -> bool:
     """Tell the tracker that a new turn started in a tracked session.
+
+    Args:
+        prompt: Optional user prompt text for per-turn integrations such as
+            phrase_automation commit mark-done.
 
     Returns:
         bool: ``True`` when the tracker reported success. ``False`` when no
@@ -463,7 +467,11 @@ def notify_turn_start() -> bool:
     if not token:
         log.debug("no run token; skipping turn-start", component=LOG_COMPONENT)
         return False
-    return run_tracker(["turn-start", "--token", token])
+    args = ["turn-start", "--token", token]
+    normalized_prompt = normalize_text(prompt)
+    if normalized_prompt:
+        args.extend(["--prompt", normalized_prompt])
+    return run_tracker(args)
 
 
 def transcript_prompt(transcript_path: str) -> str:
@@ -590,7 +598,7 @@ def handle_claude(payload: dict[str, Any]) -> int:
         if lifecycle_is_tracker_managed():
             # Re-arm the tracker's per-turn finish dedupe (and let it speak a
             # follow-up "started") so the next Stop announces again.
-            notify_turn_start()
+            notify_turn_start(str(payload.get("prompt", "")))
         update_title(str(payload.get("prompt", "")), context, feature_key=feature_key)
     elif event in {"Notification", "PermissionRequest"}:
         raw_message = normalize_text(str(payload.get("message", "")))
