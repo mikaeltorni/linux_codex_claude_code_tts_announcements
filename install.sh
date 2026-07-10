@@ -15,15 +15,77 @@ source "$INSTALL_LIB"
 
 # Load the shared installer component framework. Its single source of truth is
 # the linux_installation_scripts_functions repository (cloned as a sibling by
-# installation_scripts, or downloaded on demand) -- no per-repo vendored copy.
+# installation_scripts, cloned non-interactively into the user cache for a
+# private standalone checkout, or downloaded from a public raw mirror) -- no
+# per-repo vendored copy.
 for __isc_d in "${ISC_FUNCTIONS_DIR:-}" \
                "$SCRIPT_DIR/../linux_installation_scripts_functions" \
                "$HOME/projects/linux_installation_scripts_functions"; do
-  [ -n "$__isc_d" ] && [ -f "$__isc_d/component_loader.sh" ] && { source "$__isc_d/component_loader.sh"; break; }
+  if [ -n "$__isc_d" ] && [ -f "$__isc_d/component_loader.sh" ]; then
+    ISC_FUNCTIONS_DIR="$__isc_d"
+    export ISC_FUNCTIONS_DIR
+    # shellcheck source=/dev/null
+    source "$__isc_d/component_loader.sh"
+    break
+  fi
 done
-declare -F isc_activate_components >/dev/null 2>&1 || \
-  source <(curl -fsSL "https://raw.githubusercontent.com/mikaeltorni/linux_installation_scripts_functions/${ISC_FUNCTIONS_REF:-master}/component_loader.sh")
+
+# Both setup repositories are private. A developer who cloned this repository
+# already has Git credentials, so use a prompt-free shallow clone before trying
+# the unauthenticated raw URL (which correctly returns 404 for private repos).
+if ! declare -F isc_activate_components >/dev/null 2>&1; then
+  __isc_ref="${ISC_FUNCTIONS_REF:-master}"
+  __isc_safe_ref="$(printf '%s' "$__isc_ref" | tr -c 'A-Za-z0-9._-' '_')"
+  __isc_cache="${XDG_CACHE_HOME:-$HOME/.cache}/installation_scripts/functions-checkouts/$__isc_safe_ref"
+  if [ ! -f "$__isc_cache/component_loader.sh" ] && command -v git >/dev/null 2>&1; then
+    mkdir -p "$(dirname "$__isc_cache")"
+    # An interrupted older clone is cache-only state and cannot be sourced.
+    [ ! -e "$__isc_cache" ] || rm -rf "$__isc_cache"
+    __isc_clone_tmp="${__isc_cache}.tmp.$$"
+    rm -rf "$__isc_clone_tmp"
+    __isc_git_url="${ISC_FUNCTIONS_GIT_URL:-https://github.com/mikaeltorni/linux_installation_scripts_functions.git}"
+    if GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 --branch "$__isc_ref" \
+         "$__isc_git_url" "$__isc_clone_tmp" >/dev/null 2>&1; then
+      if ! mv -T "$__isc_clone_tmp" "$__isc_cache" 2>/dev/null; then
+        # Another concurrent installer may have populated the same cache first.
+        rm -rf "$__isc_clone_tmp"
+      fi
+    else
+      rm -rf "$__isc_clone_tmp"
+    fi
+  fi
+  if [ -f "$__isc_cache/component_loader.sh" ]; then
+    ISC_FUNCTIONS_DIR="$__isc_cache"
+    export ISC_FUNCTIONS_DIR
+    # shellcheck source=/dev/null
+    source "$__isc_cache/component_loader.sh"
+  fi
+fi
+
+# Public deployments and explicit mirrors can still bootstrap from raw files.
+if ! declare -F isc_activate_components >/dev/null 2>&1; then
+  __isc_raw="${ISC_FUNCTIONS_RAW:-https://raw.githubusercontent.com/mikaeltorni/linux_installation_scripts_functions/${ISC_FUNCTIONS_REF:-master}}"
+  if __isc_loader_tmp="$(mktemp 2>/dev/null)"; then
+    if command -v curl >/dev/null 2>&1 && \
+       curl -fsSL "$__isc_raw/component_loader.sh" -o "$__isc_loader_tmp"; then
+      # shellcheck source=/dev/null
+      source "$__isc_loader_tmp"
+    elif command -v wget >/dev/null 2>&1 && \
+         wget -qO "$__isc_loader_tmp" "$__isc_raw/component_loader.sh"; then
+      # shellcheck source=/dev/null
+      source "$__isc_loader_tmp"
+    fi
+    rm -f "$__isc_loader_tmp"
+  fi
+fi
+
+if ! declare -F isc_activate_components >/dev/null 2>&1; then
+  printf 'ERROR: unable to load linux_installation_scripts_functions.\n' >&2
+  printf 'Clone it beside this repository, set ISC_FUNCTIONS_DIR, or configure authenticated Git access.\n' >&2
+  exit 1
+fi
 isc_activate_components
+unset __isc_d __isc_ref __isc_safe_ref __isc_cache __isc_clone_tmp __isc_git_url __isc_raw __isc_loader_tmp
 source "$SCRIPT_DIR/installer/components.sh"
 
 main() {

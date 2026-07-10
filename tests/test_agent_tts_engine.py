@@ -7,12 +7,17 @@ suffixing, and the spoken wording — without ever producing real audio
 """
 
 import importlib
+import os
+import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
 LIB = Path(__file__).resolve().parent.parent / "lib"
+ROOT = LIB.parent
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
@@ -42,6 +47,10 @@ _ATTS_ENV = (
     "CLINE_TTS_VOICE",
     "GROK_TTS_VOICE",
     "ATTS_GROK_VOICE",
+    "OPENROUTER_CODEX_TTS_VOICE",
+    "ATTS_OPENROUTER_VOICE",
+    "NVIDIA_CODEX_TTS_VOICE",
+    "ATTS_NVIDIA_VOICE",
 )
 
 
@@ -132,6 +141,25 @@ def test_voice_for_kind_precedence(engine, monkeypatch):
     assert engine.voice_for_kind("codex", {"CODEX__TTS_VOICE": "af_legacy"}) == "af_legacy"
 
 
+def test_codex_home_for_kind_covers_every_runtime(engine):
+    """Every agent kind resolves its own config home through the shared engine."""
+    expected = {
+        "codex": ".codex",
+        "qwen": ".codex-qwen",
+        "api": ".codex-api",
+        "claude": ".claude",
+        "cline": ".cline",
+        "grok": ".grok",
+        "openrouter": ".codex-openrouter",
+        "nvidia": ".codex-nvidia",
+    }
+
+    assert {
+        kind: Path(engine.codex_home_for_kind(kind, {})).name
+        for kind in expected
+    } == expected
+
+
 def test_voice_for_kind_claude_legacy_env(engine, monkeypatch):
     """The legacy CLAUDE_TTS_VOICE still selects the Claude voice."""
     monkeypatch.setenv("CLAUDE_TTS_VOICE", "af_river")
@@ -178,7 +206,7 @@ def test_default_voices_are_pairwise_distinct(engine, capsys):
     """Each runtime's built-in default Kokoro voice must differ from the others."""
     defaults = {
         kind: engine.voice_for_kind(kind, {})
-        for kind in ("codex", "claude", "qwen", "cline", "grok")
+        for kind in ("codex", "claude", "qwen", "cline", "grok", "openrouter", "nvidia")
     }
     voices = list(defaults.values())
     assert len(voices) == len(set(voices)), f"duplicate default voices: {defaults}"
@@ -312,6 +340,244 @@ def test_play_audio_suppressed_returns_true(engine):
     assert engine.play_audio(Path("/nonexistent.wav")) is True
 
 
+def test_no_audio_false_value_does_not_suppress_playback(engine, monkeypatch, tmp_path):
+    """An explicit ``ATTS_NO_AUDIO=0`` must leave real playback enabled."""
+    audio = tmp_path / "speech.wav"
+    audio.write_bytes(b"wav")
+    monkeypatch.setenv("ATTS_NO_AUDIO", "0")
+    monkeypatch.setattr(
+        engine.shutil,
+        "which",
+        lambda command: f"/usr/bin/{command}" if command == "pw-play" else None,
+    )
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return engine.subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(engine.subprocess, "run", fake_run)
+
+    assert engine.play_audio(audio) is True
+    assert calls == [["/usr/bin/pw-play", str(audio)]]
+
+
+def test_play_audio_serializes_concurrent_players(engine, monkeypatch, tmp_path):
+    """Concurrent announcements must never overlap audio-player processes."""
+    first = tmp_path / "first.wav"
+    second = tmp_path / "second.wav"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    monkeypatch.delenv("ATTS_NO_AUDIO", raising=False)
+    monkeypatch.setattr(
+        engine.shutil,
+        "which",
+        lambda command: f"/usr/bin/{command}" if command == "pw-play" else None,
+    )
+    guard = threading.Lock()
+    active = 0
+    maximum_active = 0
+    start = threading.Barrier(2)
+
+    def fake_run(command, **kwargs):
+        nonlocal active, maximum_active
+        with guard:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        time.sleep(0.1)
+        with guard:
+            active -= 1
+        return engine.subprocess.CompletedProcess(command, 0)
+
+    def play(path):
+        start.wait()
+        assert engine.play_audio(path) is True
+
+    monkeypatch.setattr(engine.subprocess, "run", fake_run)
+    threads = [
+        threading.Thread(target=play, args=(first,)),
+        threading.Thread(target=play, args=(second,)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert maximum_active == 1
+
+
+def test_concurrent_identical_synthesis_runs_kokoro_once(tmp_path):
+    """Two detached copies requesting one cache key must share one synthesis."""
+    bin_dir = tmp_path / "bin"
+    model_dir = tmp_path / "models"
+    state_dir = tmp_path / "state"
+    bin_dir.mkdir()
+    model_dir.mkdir()
+    (model_dir / "kokoro-v1.0.onnx").write_bytes(b"model")
+    (model_dir / "voices-v1.0.bin").write_bytes(b"voices")
+    call_log = tmp_path / "uvx-calls"
+    release = tmp_path / "release-uvx"
+    uvx = bin_dir / "uvx"
+    uvx.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'call\\n' >> \"$UV_CALL_LOG\"\n"
+        "while [ ! -e \"$UV_RELEASE\" ]; do sleep 0.01; done\n"
+        "printf 'complete-wav' > \"$7\"\n",
+        encoding="utf-8",
+    )
+    uvx.chmod(0o755)
+    env = os.environ.copy()
+    for name in tuple(env):
+        if name.startswith("ATTS_"):
+            env.pop(name)
+    env.update(
+        {
+            "ATTS_STATE_DIR": str(state_dir),
+            "ATTS_LOG_DIR": str(tmp_path / "log"),
+            "ATTS_MODEL_DIR": str(model_dir),
+            "ATTS_DEVICE": "cpu",
+            "ATTS_VOLUME_PERCENT": "100",
+            "ATTS_ANNOUNCE_WORKSPACE": "0",
+            "ATTS_NO_AUDIO": "1",
+            "UV_CALL_LOG": str(call_log),
+            "UV_RELEASE": str(release),
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+        }
+    )
+    command = [
+        str(ROOT / "scripts/agent-tts"),
+        "voice",
+        "--text",
+        "same announcement",
+        "--voice",
+        "af_sky",
+        "--no-play",
+    ]
+
+    first = subprocess.Popen(command, env=env)
+    deadline = time.monotonic() + 3
+    while not call_log.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert call_log.exists(), "first synthesis never reached the fake uvx"
+    second = subprocess.Popen(command, env=env)
+    time.sleep(0.2)
+    release.touch()
+
+    assert first.wait(timeout=5) == 0
+    assert second.wait(timeout=5) == 0
+    assert call_log.read_text(encoding="utf-8").splitlines() == ["call"]
+
+
+def test_synthesis_publishes_cache_only_after_output_is_complete(tmp_path):
+    """A half-written Kokoro file must never be visible as a cache hit."""
+    bin_dir = tmp_path / "bin"
+    model_dir = tmp_path / "models"
+    state_dir = tmp_path / "state"
+    bin_dir.mkdir()
+    model_dir.mkdir()
+    (model_dir / "kokoro-v1.0.onnx").write_bytes(b"model")
+    (model_dir / "voices-v1.0.bin").write_bytes(b"voices")
+    ready = tmp_path / "uvx-ready"
+    release = tmp_path / "release-uvx"
+    uvx = bin_dir / "uvx"
+    uvx.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'partial' > \"$7\"\n"
+        "touch \"$UV_READY\"\n"
+        "while [ ! -e \"$UV_RELEASE\" ]; do sleep 0.01; done\n"
+        "printf 'complete-wav' > \"$7\"\n",
+        encoding="utf-8",
+    )
+    uvx.chmod(0o755)
+    env = os.environ.copy()
+    for name in tuple(env):
+        if name.startswith("ATTS_"):
+            env.pop(name)
+    env.update(
+        {
+            "ATTS_STATE_DIR": str(state_dir),
+            "ATTS_LOG_DIR": str(tmp_path / "log"),
+            "ATTS_MODEL_DIR": str(model_dir),
+            "ATTS_DEVICE": "cpu",
+            "ATTS_VOLUME_PERCENT": "100",
+            "ATTS_ANNOUNCE_WORKSPACE": "0",
+            "ATTS_NO_AUDIO": "1",
+            "UV_READY": str(ready),
+            "UV_RELEASE": str(release),
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+        }
+    )
+    command = [
+        str(ROOT / "scripts/agent-tts"),
+        "voice",
+        "--text",
+        "atomic announcement",
+        "--voice",
+        "af_sky",
+        "--no-play",
+    ]
+
+    process = subprocess.Popen(command, env=env)
+    deadline = time.monotonic() + 3
+    while not ready.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    try:
+        assert ready.exists(), "synthesis never produced its partial output"
+        cache_dir = state_dir / "voice-cache"
+        assert list(cache_dir.glob("*.wav")) == []
+    finally:
+        # Never strand the fake subprocess if the regression assertion fails.
+        release.touch()
+
+    assert process.wait(timeout=5) == 0
+    published = list(cache_dir.glob("*.wav"))
+    assert len(published) == 1
+    assert published[0].read_bytes() == b"complete-wav"
+
+
+def test_stale_synthesis_workdirs_are_cleaned(engine, tmp_path):
+    """Killed synthesis processes leave only age-bounded temporary state."""
+    temp_root = tmp_path / "voice-cache/.tmp"
+    stale = temp_root / "stale-work"
+    recent = temp_root / "recent-work"
+    stale.mkdir(parents=True)
+    recent.mkdir()
+    (stale / "input.txt").write_text("stale", encoding="utf-8")
+    (recent / "input.txt").write_text("recent", encoding="utf-8")
+    old = time.time() - engine.STALE_SYNTHESIS_SECONDS - 1
+    os.utime(stale, (old, old))
+
+    engine._cleanup_stale_synthesis_dirs(temp_root)
+
+    assert not stale.exists()
+    assert recent.is_dir()
+
+
+def test_kokoro_synthesis_has_a_timeout(engine, monkeypatch, tmp_path):
+    """A hung provider must fail cleanly instead of holding its cache lock forever."""
+    tts_dir = tmp_path / "tts"
+    tts_dir.mkdir()
+    (tts_dir / "kokoro-v1.0.onnx").write_bytes(b"model")
+    (tts_dir / "voices-v1.0.bin").write_bytes(b"voices")
+    monkeypatch.setattr(engine, "resolve_uvx", lambda: "/usr/bin/uvx")
+    monkeypatch.setattr(engine, "resolve_tts_dir", lambda _home: tts_dir)
+    monkeypatch.setattr(engine, "resolve_kokoro_device", lambda: "cpu")
+    monkeypatch.setattr(engine, "current_tts_volume_percent", lambda: 100.0)
+    seen = []
+
+    def fake_run(command, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        raise engine.subprocess.TimeoutExpired(command, kwargs.get("timeout"))
+
+    monkeypatch.setattr(engine.subprocess, "run", fake_run)
+
+    assert engine.speak_with_kokoro("timeout", "af_sky", tmp_path, play=False) is False
+    assert seen == [engine.KOKORO_TIMEOUT_SECONDS]
+    temp_root = engine.STATE_DIR / "voice-cache/.tmp"
+    assert not temp_root.exists() or not any(temp_root.iterdir())
+
+
 def test_state_file_read_errors_are_logged(engine, monkeypatch):
     """Unreadable persisted state falls back cleanly with a diagnostic log."""
     def fail_read_text(self, encoding=None):
@@ -347,3 +613,27 @@ def test_fallback_speak_logs_missing_synthesizer(engine, monkeypatch):
 
     contents = (engine.LOG_DIR / "voice.log").read_text(encoding="utf-8")
     assert "fallback_speak skipped: no fallback synthesizer found" in contents
+
+
+def test_fallback_speak_waits_and_tries_the_second_synthesizer(
+    engine, monkeypatch
+):
+    """Fallback speech stays serialized and recovers from a failed spd-say."""
+    monkeypatch.delenv("ATTS_NO_AUDIO", raising=False)
+    monkeypatch.setattr(engine.shutil, "which", lambda command: f"/usr/bin/{command}")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return engine.subprocess.CompletedProcess(
+            command,
+            1 if command[0] == "spd-say" else 0,
+        )
+
+    monkeypatch.setattr(engine.subprocess, "run", fake_run)
+
+    assert engine.fallback_speak("hello") is True
+    assert calls == [
+        ("spd-say", "--wait", "hello"),
+        ("espeak-ng", "hello"),
+    ]

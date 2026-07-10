@@ -1,8 +1,8 @@
 # Linux Codex/Claude Code TTS Announcements
 
-> Part of [installation_scripts](https://github.com/mikaeltorni/installation_scripts) — the standalone **`agent-tts`** text-to-speech engine and notify hooks for **Codex**, **Claude Code**, **Cline**, **Grok**, and **Qwen** agents. Tested on Ubuntu 24.04.4 LTS; the Python engine is largely portable but the audio playback backend is currently Linux-specific (Windows/macOS untested).
+> Part of [installation_scripts](https://github.com/mikaeltorni/installation_scripts) — the standalone **`agent-tts`** text-to-speech engine and notify hooks for **Codex**, **Claude Code**, **Cline**, **Grok**, **Qwen**, **OpenRouter**, and **NVIDIA** agents. Tested on Ubuntu 24.04.4 LTS; the Python engine is largely portable but the audio playback backend is currently Linux-specific (Windows/macOS untested).
 
-The agent text-to-speech home for Codex, Claude Code, and Qwen on Linux. This
+The agent text-to-speech home for the supported coding agents on Linux. This
 repository ships two things:
 
 1. **`agent-tts`** — the standalone speech engine that owns *all* agent TTS:
@@ -29,7 +29,10 @@ This repository has two layers with different dependencies:
   hooks simply do nothing; nothing here *requires* ACC to build or install.
 - **Build-time (soft):** the shared installer component framework
   [`linux_installation_scripts_functions`](https://github.com/mikaeltorni/linux_installation_scripts_functions) —
-  loaded from a sibling checkout when present, otherwise downloaded on demand.
+  loaded from a sibling checkout when present. A standalone private checkout
+  uses existing Git credentials to clone it non-interactively under the user
+  cache; public deployments can still download it from a raw mirror. Override
+  those sources with `ISC_FUNCTIONS_GIT_URL` or `ISC_FUNCTIONS_RAW`.
 
 Agent Command Center delegates all speech to this repository's `agent-tts`
 engine and installs it through its recommended (default-on) `tts_announcements`
@@ -66,6 +69,16 @@ agent-tts volume 1000                            # read/set the volume percentag
 agent-tts silent toggle                          # mute/unmute all announcements
 ```
 
+Detached agents can finish simultaneously. Cache generation is locked per
+utterance and published atomically, so identical requests share one complete
+WAV instead of racing over a partial file. Playback (including the desktop
+fallback synthesizers) is serialized across processes so announcements do not
+overlap or break the PipeWire/PulseAudio connection. Direct `voice`, `announce`,
+and `clarify` commands return nonzero when neither Kokoro nor a fallback can
+handle the message. Kokoro calls time out instead of holding a cache lock
+forever, and later runs remove abandoned temporary work directories after their
+safe age threshold.
+
 Tunables (env overrides win over the persisted values):
 
 - `ATTS_SPEED` — speech speed multiplier (default `1.5`).
@@ -77,17 +90,19 @@ Tunables (env overrides win over the persisted values):
   agentic-cli-status tmux debug console), whose lifecycle hooks would
   otherwise announce fake sessions at login.
 - `ATTS_VOICE` — global voice override.
-- `ATTS_CODEX_VOICE`, `ATTS_CLAUDE_VOICE`, `ATTS_CLINE_VOICE`, `ATTS_GROK_VOICE`, and `ATTS_QWEN_VOICE` —
+- `ATTS_CODEX_VOICE`, `ATTS_CLAUDE_VOICE`, `ATTS_CLINE_VOICE`,
+  `ATTS_GROK_VOICE`, `ATTS_QWEN_VOICE`, `ATTS_OPENROUTER_VOICE`, and
+  `ATTS_NVIDIA_VOICE` —
   per-runtime overrides when `ATTS_VOICE` is unset. Legacy
   `CODEX_TTS_VOICE`, `CLAUDE_TTS_VOICE`, `GROK_TTS_VOICE`, and
-  `QWEN_CODEX_TTS_VOICE` remain supported. ACC wrappers' normalized
-  `CODEX__TTS_VOICE` also remains supported and takes precedence over
-  per-runtime legacy names.
+  `QWEN_CODEX_TTS_VOICE`, plus `OPENROUTER_CODEX_TTS_VOICE` and
+  `NVIDIA_CODEX_TTS_VOICE`, remain supported. ACC wrappers' normalized
+  `CODEX__TTS_VOICE` remains a fallback for Codex, Claude, Qwen, and Cline.
 - Default Kokoro voices per runtime (when no override is set): codex `af_bella`,
-  claude `af_sky`, qwen/Local `af_heart`, cline `af_aoede`, grok `af_kore`
-  (energetic female; kept distinct from the other defaults). Grok ignores a
-  generic shell-wide `CODEX__TTS_VOICE` so a stale Local/Qwen export cannot
-  override `GROK_TTS_VOICE` / `ATTS_GROK_VOICE`.
+  claude `af_sky`, qwen/Local `af_heart`, cline `af_aoede`, grok `af_kore`,
+  OpenRouter `af_jessica`, and NVIDIA `af_sarah` (all distinct). Grok,
+  OpenRouter, and NVIDIA ignore a generic shell-wide `CODEX__TTS_VOICE` so a
+  stale Local/Qwen export cannot override their reserved per-runtime voices.
 - `ATTS_MODEL_DIR` — optional shared Kokoro model directory. Cline and Claude
   automatically reuse `~/.codex/tts` when their own config homes have no model
   assets, avoiding duplicate downloads and robotic fallback speech.
@@ -117,7 +132,8 @@ the session. Run `agent-tts prewarm` by hand to warm the current shell.
   categories. Their persisted values live in
   `~/.config/agent-tts/announcements.env`.
 - `ATTS_EVENT_CONFIG_FILE` — override that persisted event-settings path.
-- `ATTS_NO_AUDIO` — generate/cache clips but never play (used by tests).
+- `ATTS_NO_AUDIO` — when truthy, generate/cache clips but never play (used by
+  tests); an explicit false value such as `0` leaves playback enabled.
 - `ATTS_STATE_DIR` — override the engine state/cache directory.
 - `ATTS_LOG_DIR` — override where `agent-tts` writes `voice.log`.
 
@@ -166,6 +182,7 @@ that core**, so the program works no matter which subset you pick.
 |---|---|
 | `engine` | `agent-tts` speech engine + `~/.local/bin/agent-tts` symlink |
 | `hook_files` | notify hook code under `~/.local/share/codex-claude-tts-announcements/` |
+| `boot_prewarm` | login-time `agent-tts-prewarm.service` user unit |
 | `start_voice` | enable start announcements for every runtime |
 | `finish_voice` | enable end announcements for every runtime |
 | `attention_voice` | enable ask-for-further-changes / needs-input announcements |

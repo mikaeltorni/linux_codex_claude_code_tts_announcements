@@ -39,13 +39,18 @@ The engine has no dependency on Agent Command Center.
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
 import math
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from tts_announcements import logging_utils
 
@@ -77,6 +82,9 @@ DEFAULT_TTS_SPEED = 1.5
 DEFAULT_TTS_VOLUME_PERCENT = 1000.0
 LEGACY_DEFAULT_TTS_VOLUME_ENV = "125"
 DEFAULT_GPU_MIN_FREE_MIB = 1024
+PLAYBACK_TIMEOUT_SECONDS = 120
+KOKORO_TIMEOUT_SECONDS = 180
+STALE_SYNTHESIS_SECONDS = 60 * 60
 
 SILENT_ENABLED_TEXT = "Agent command center silent mode enabled. Announcements muted."
 SILENT_DISABLED_TEXT = "Agent command center silent mode unmuted. Announcements restored."
@@ -89,6 +97,69 @@ def _first_env(*names: str) -> str | None:
         if value is not None and value.strip() != "":
             return value
     return None
+
+
+@contextmanager
+def _exclusive_file_lock(path: Path, purpose: str) -> Iterator[None]:
+    """Serialize one cross-process TTS operation with a Linux advisory lock.
+
+    Lock setup is best-effort: an unwritable state directory is logged but does
+    not turn a spoken notification into a hard failure. Callers must still use
+    atomic file publication where partially written output would be unsafe.
+
+    Args:
+        path: File whose descriptor carries the advisory lock.
+        purpose: Short diagnostic label such as ``"playback"`` or ``"cache"``.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = path.open("a+", encoding="utf-8")
+    except OSError as exc:
+        LOGGER.warning("%s lock unavailable path=%s: %s", purpose, path, exc)
+        yield
+        return
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            LOGGER.info("waiting for %s lock path=%s", purpose, path)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError as exc:
+            LOGGER.warning("%s unlock failed path=%s: %s", purpose, path, exc)
+        handle.close()
+
+
+def _cleanup_stale_synthesis_dirs(temp_root: Path) -> None:
+    """Remove abandoned synthesis work directories older than one hour.
+
+    A process killed with SIGKILL cannot execute its normal ``finally`` cleanup.
+    Kokoro calls are bounded by :data:`KOKORO_TIMEOUT_SECONDS`, so a work
+    directory older than :data:`STALE_SYNTHESIS_SECONDS` cannot belong to a
+    healthy in-flight synthesis.
+
+    Args:
+        temp_root: Cache-local directory containing per-process work folders.
+    """
+    try:
+        children = list(temp_root.iterdir())
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        LOGGER.warning("temporary synthesis scan failed path=%s: %s", temp_root, exc)
+        return
+    cutoff = time.time() - STALE_SYNTHESIS_SECONDS
+    for child in children:
+        try:
+            if not child.is_dir() or child.stat().st_mtime >= cutoff:
+                continue
+            shutil.rmtree(child)
+            LOGGER.info("removed stale synthesis work directory %s", child)
+        except OSError as exc:
+            LOGGER.warning("stale synthesis cleanup failed path=%s: %s", child, exc)
 
 
 def _read_state_file(filename: str) -> str:
@@ -271,8 +342,12 @@ def codex_home_for_kind(kind: str, env: dict[str, str]) -> str:
         return str(Path.home() / ".codex-qwen")
     if kind == "api":
         return str(Path.home() / ".codex-api")
+    if kind == "claude":
+        return str(Path.home() / ".claude")
     if kind == "cline":
         return str(Path.home() / ".cline")
+    if kind == "grok":
+        return str(Path.home() / ".grok")
     if kind == "openrouter":
         return str(Path.home() / ".codex-openrouter")
     if kind == "nvidia":
@@ -640,7 +715,15 @@ def with_workspace_suffix(text: str, workspace: str | None = None) -> str:
 
 def _no_audio() -> bool:
     """Return whether audio playback is globally suppressed for this process."""
-    return _first_env("ATTS_NO_AUDIO", "CODEX_AGENT_TRACKER_NO_AUDIO") is not None
+    value = _first_env("ATTS_NO_AUDIO", "CODEX_AGENT_TRACKER_NO_AUDIO")
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    if normalized in TRUTHY:
+        return True
+    if normalized not in FALSEY:
+        LOGGER.warning("invalid ATTS_NO_AUDIO value %r; keeping playback enabled", value)
+    return False
 
 
 def play_audio(audio_path: Path, ignore_silent: bool = False) -> bool:
@@ -656,47 +739,90 @@ def play_audio(audio_path: Path, ignore_silent: bool = False) -> bool:
     if not ignore_silent and acc_silent_enabled():
         LOGGER.info(f"playback suppressed (silent) for {audio_path}")
         return True
-    for player in ("pw-play", "paplay", "aplay"):
-        player_path = shutil.which(player)
-        if not player_path:
-            continue
-        try:
-            result = subprocess.run(
-                [player_path, str(audio_path)],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except Exception as exc:
-            LOGGER.info(f"{player} exception: {exc}")
-            continue
-        if result.returncode == 0:
-            LOGGER.info(f"played {audio_path} with {player}")
-            return True
-        LOGGER.info(f"{player} failed rc={result.returncode}: {(result.stderr or '').strip()}")
+    # Tracker announcements are detached processes and can finish together.
+    # PipeWire/PulseAudio rejected overlapping bursts in production, so one
+    # global lock keeps each short clip intact and in announcement order.
+    with _exclusive_file_lock(STATE_DIR / "playback.lock", "playback"):
+        for player in ("pw-play", "paplay", "aplay"):
+            player_path = shutil.which(player)
+            if not player_path:
+                continue
+            try:
+                result = subprocess.run(
+                    [player_path, str(audio_path)],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=PLAYBACK_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                LOGGER.warning(
+                    "%s timed out after %ss for %s",
+                    player,
+                    PLAYBACK_TIMEOUT_SECONDS,
+                    audio_path,
+                )
+                continue
+            except Exception as exc:
+                LOGGER.info(f"{player} exception: {exc}")
+                continue
+            if result.returncode == 0:
+                LOGGER.info(f"played {audio_path} with {player}")
+                return True
+            LOGGER.info(f"{player} failed rc={result.returncode}: {(result.stderr or '').strip()}")
     return False
 
 
-def fallback_speak(text: str, ignore_silent: bool = False) -> None:
+def fallback_speak(text: str, ignore_silent: bool = False) -> bool:
     """Speak text with a desktop fallback synthesizer (spd-say/espeak-ng).
 
     Honors ``ATTS_NO_AUDIO`` and silent mode (unless ``ignore_silent``).
+
+    Returns:
+        ``True`` when speech was suppressed intentionally or a fallback command
+        succeeded; ``False`` when no fallback could speak the message.
     """
     if _no_audio():
         LOGGER.info(f"fallback_speak suppressed (ATTS_NO_AUDIO) text={text!r}")
-        return
+        return True
     if not ignore_silent and acc_silent_enabled():
         LOGGER.info(f"fallback_speak suppressed (silent) text={text!r}")
-        return
-    for cmd in (("spd-say", text), ("espeak-ng", text)):
-        if shutil.which(cmd[0]):
+        return True
+    found = False
+    commands = (("spd-say", "--wait", text), ("espeak-ng", text))
+    with _exclusive_file_lock(STATE_DIR / "playback.lock", "fallback playback"):
+        for cmd in commands:
+            if not shutil.which(cmd[0]):
+                continue
+            found = True
             try:
-                subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                result = subprocess.run(
+                    cmd,
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=PLAYBACK_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                LOGGER.warning(
+                    "%s fallback timed out after %ss",
+                    cmd[0],
+                    PLAYBACK_TIMEOUT_SECONDS,
+                )
+                continue
             except OSError as exc:
                 LOGGER.info(f"{cmd[0]} fallback launch failed: {exc}")
-            return
-    LOGGER.info("fallback_speak skipped: no fallback synthesizer found")
+                continue
+            if result.returncode == 0:
+                LOGGER.info("fallback spoke with %s", cmd[0])
+                return True
+            LOGGER.info("%s fallback failed rc=%s", cmd[0], result.returncode)
+    if found:
+        LOGGER.warning("all fallback synthesizers failed")
+    else:
+        LOGGER.info("fallback_speak skipped: no fallback synthesizer found")
+    return False
 
 
 def resolve_tts_dir(codex_home: Path) -> Path:
@@ -904,95 +1030,122 @@ def speak_with_kokoro(
     audio_dir = STATE_DIR / "voice-cache"
     audio_dir.mkdir(parents=True, exist_ok=True)
     audio_path = audio_dir / f"{safe_name}{speed_suffix}{volume_suffix}.wav"
-    raw_audio_path = Path("/tmp") / f"agent_tts_{safe_name}_raw.wav"
-    input_path = Path("/tmp") / f"agent_tts_{safe_name}.txt"
-
-    if audio_path.is_file():
+    if audio_path.is_file() and audio_path.stat().st_size > 0:
         LOGGER.info(f"using cached {audio_path} voice={voice} text={text!r}")
         if not play:
             return True
         return play_audio(audio_path, ignore_silent=ignore_silent)
-
-    command = [
-        uvx,
-        "--python",
-        "3.12",
-        "--from",
-        "kokoro-tts",
-        "kokoro-tts",
-        str(input_path),
-        str(raw_audio_path if abs(gain_db) >= 0.0005 else audio_path),
-        "--voice",
-        voice,
-        "--speed",
-        speed_text,
-    ]
-    selected_device = resolve_kokoro_device()
-    attempts = [selected_device]
-    if selected_device == "cuda":
-        attempts.append("cpu")
-    completed_device = ""
-    generated_path = raw_audio_path if abs(gain_db) >= 0.0005 else audio_path
-    for device in attempts:
-        try:
-            generated_path.unlink(missing_ok=True)
-            input_path.write_text(text, encoding="utf-8")
-            subprocess.run(
-                command,
-                cwd=tts_dir,
-                env=kokoro_subprocess_env(tts_dir, device),
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
+    lock_path = audio_dir / ".locks" / f"{audio_path.name}.lock"
+    with _exclusive_file_lock(lock_path, "cache"):
+        # A sibling process may have finished while this process waited.
+        if audio_path.is_file() and audio_path.stat().st_size > 0:
+            LOGGER.info(f"using cached after wait {audio_path} voice={voice} text={text!r}")
+        else:
+            temp_root = audio_dir / ".tmp"
+            temp_root.mkdir(parents=True, exist_ok=True)
+            _cleanup_stale_synthesis_dirs(temp_root)
+            work_dir = Path(tempfile.mkdtemp(prefix=f"{safe_name}-", dir=temp_root))
+            raw_audio_path = work_dir / "raw.wav"
+            generated_audio_path = work_dir / "generated.wav"
+            input_path = work_dir / "input.txt"
+            kokoro_output = (
+                raw_audio_path if abs(gain_db) >= 0.0005 else generated_audio_path
             )
-        except subprocess.CalledProcessError as exc:
-            LOGGER.info(
-                "kokoro failed device=%s rc=%s: %s",
-                device,
-                exc.returncode,
-                (exc.stderr or "").strip(),
-            )
-            if device == "cuda":
-                LOGGER.warning("kokoro CUDA synthesis failed; retrying on CPU")
-                continue
-            return False
-        except Exception as exc:
-            LOGGER.info("kokoro exception device=%s: %s", device, exc)
-            return False
-        if not generated_path.is_file() or generated_path.stat().st_size == 0:
-            LOGGER.warning(
-                "kokoro produced no audio device=%s path=%s",
-                device,
-                generated_path,
-            )
-            if device == "cuda":
-                LOGGER.warning("kokoro CUDA output missing; retrying on CPU")
-                continue
-            return False
-        completed_device = device
-        break
-    if not completed_device:
-        return False
-
-    if abs(gain_db) >= 0.0005:
-        if not amplify_audio(raw_audio_path, audio_path, gain_db):
+            command = [
+                uvx,
+                "--python",
+                "3.12",
+                "--from",
+                "kokoro-tts",
+                "kokoro-tts",
+                str(input_path),
+                str(kokoro_output),
+                "--voice",
+                voice,
+                "--speed",
+                speed_text,
+            ]
+            selected_device = resolve_kokoro_device()
+            attempts = [selected_device]
+            if selected_device == "cuda":
+                attempts.append("cpu")
+            completed_device = ""
             try:
-                raw_audio_path.replace(audio_path)
-                LOGGER.info(f"using unamplified fallback {audio_path}")
-            except Exception as exc:
-                LOGGER.info(f"audio fallback failed: {exc}")
-                return False
+                for device in attempts:
+                    try:
+                        kokoro_output.unlink(missing_ok=True)
+                        input_path.write_text(text, encoding="utf-8")
+                        subprocess.run(
+                            command,
+                            cwd=tts_dir,
+                            env=kokoro_subprocess_env(tts_dir, device),
+                            check=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            timeout=KOKORO_TIMEOUT_SECONDS,
+                        )
+                    except subprocess.TimeoutExpired:
+                        LOGGER.warning(
+                            "kokoro timed out device=%s after %ss",
+                            device,
+                            KOKORO_TIMEOUT_SECONDS,
+                        )
+                        if device == "cuda":
+                            LOGGER.warning("kokoro CUDA synthesis timed out; retrying on CPU")
+                            continue
+                        return False
+                    except subprocess.CalledProcessError as exc:
+                        LOGGER.info(
+                            "kokoro failed device=%s rc=%s: %s",
+                            device,
+                            exc.returncode,
+                            (exc.stderr or "").strip(),
+                        )
+                        if device == "cuda":
+                            LOGGER.warning("kokoro CUDA synthesis failed; retrying on CPU")
+                            continue
+                        return False
+                    except Exception as exc:
+                        LOGGER.info("kokoro exception device=%s: %s", device, exc)
+                        return False
+                    if not kokoro_output.is_file() or kokoro_output.stat().st_size == 0:
+                        LOGGER.warning(
+                            "kokoro produced no audio device=%s path=%s",
+                            device,
+                            kokoro_output,
+                        )
+                        if device == "cuda":
+                            LOGGER.warning("kokoro CUDA output missing; retrying on CPU")
+                            continue
+                        return False
+                    completed_device = device
+                    break
+                if not completed_device:
+                    return False
 
-    LOGGER.info(
-        "generated %s device=%s voice=%s speed=%s volume=%s text=%r",
-        audio_path,
-        completed_device,
-        voice,
-        speed_text,
-        volume_text,
-        text,
-    )
+                if abs(gain_db) >= 0.0005:
+                    if not amplify_audio(raw_audio_path, generated_audio_path, gain_db):
+                        try:
+                            raw_audio_path.replace(generated_audio_path)
+                            LOGGER.info("using unamplified fallback for %s", audio_path)
+                        except Exception as exc:
+                            LOGGER.info(f"audio fallback failed: {exc}")
+                            return False
+                # The temporary output lives on the same filesystem as the
+                # cache, so replace publishes a complete WAV atomically.
+                generated_audio_path.replace(audio_path)
+                LOGGER.info(
+                    "generated %s device=%s voice=%s speed=%s volume=%s text=%r",
+                    audio_path,
+                    completed_device,
+                    voice,
+                    speed_text,
+                    volume_text,
+                    text,
+                )
+            finally:
+                shutil.rmtree(work_dir, ignore_errors=True)
     if not play:
         return True
     return play_audio(audio_path, ignore_silent=ignore_silent)
@@ -1015,5 +1168,5 @@ def speak(text: str, voice: str, codex_home: Path | None = None, play: bool = Tr
     if speak_with_kokoro(spoken, voice, home, play=play, ignore_silent=ignore_silent):
         return True
     if play:
-        fallback_speak(spoken, ignore_silent=ignore_silent)
+        return fallback_speak(spoken, ignore_silent=ignore_silent)
     return False

@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -74,15 +75,15 @@ def configure_codex_notify(config_file: Path, command: str) -> None:
     Args:
         config_file: Path to the Codex ``config.toml`` to update; created along
             with parent directories if missing.
-        command: The notify command string; split on whitespace to form the
-            ``notify = [...]`` array.
+        command: Shell-formatted notify command string; parsed with
+            :func:`shlex.split` to form the ``notify = [...]`` array.
 
     Returns:
         None.
     """
     block = (
         "# BEGIN TTS ANNOUNCEMENTS NOTIFY (generated)\n"
-        f"notify = {json.dumps(command.split())}\n"
+        f"notify = {json.dumps(shlex.split(command))}\n"
         "# END TTS ANNOUNCEMENTS NOTIFY (generated)\n"
     )
     try:

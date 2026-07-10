@@ -1,9 +1,89 @@
 import json
+import shlex
+import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_standalone_checkout_clones_private_component_framework(tmp_path):
+    """A checkout without siblings can bootstrap the private framework via Git."""
+    checkout = tmp_path / "standalone/tts-announcements"
+    shutil.copytree(
+        ROOT,
+        checkout,
+        ignore=shutil.ignore_patterns(".git", ".log", ".pytest_cache", "__pycache__"),
+    )
+    framework = tmp_path / "private-framework"
+    framework.mkdir()
+    (framework / "component_loader.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "isc_activate_components() { source \"$ISC_FUNCTIONS_DIR/component_runtime.sh\"; }\n",
+        encoding="utf-8",
+    )
+    (framework / "component_runtime.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "component_main() {\n"
+        "  local entry id label default rest\n"
+        "  case \"${1:-}\" in\n"
+        "    --list-components)\n"
+        "      for entry in \"${ISC_COMPONENTS[@]}\"; do\n"
+        "        IFS='|' read -r id label default rest <<<\"$entry\"\n"
+        "        printf '%s\\t%s\\t%s\\n' \"$id\" \"$label\" \"$default\"\n"
+        "      done\n"
+        "      ;;\n"
+        "  esac\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["git", "init", "-q", "-b", "master"],
+        cwd=framework,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "add", "component_loader.sh", "component_runtime.sh"],
+        cwd=framework,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=TTS Test",
+            "-c",
+            "user.email=tts-test@example.invalid",
+            "commit",
+            "-qm",
+            "test framework",
+        ],
+        cwd=framework,
+        check=True,
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    cache = tmp_path / "cache"
+
+    result = subprocess.run(
+        ["bash", str(checkout / "install.sh"), "--list-components"],
+        cwd=checkout,
+        env={
+            "HOME": str(home),
+            "XDG_CACHE_HOME": str(cache),
+            "ISC_FUNCTIONS_GIT_URL": str(framework),
+            "PATH": "/usr/bin:/bin",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "engine\tAgent TTS (agent-tts) speech engine\ton" in result.stdout
+    assert list(cache.rglob("component_loader.sh"))
 
 
 def test_installer_writes_config_hooks_without_replacing_binaries(tmp_path):
@@ -180,7 +260,7 @@ def test_boot_prewarm_installs_enabled_systemd_user_unit(tmp_path):
     launcher = home / ".local/bin/agent-tts"
     assert launcher.exists(), "core engine must self-install for prewarm to run"
     body = unit.read_text(encoding="utf-8")
-    assert f"ExecStart={launcher} prewarm" in body
+    assert f'ExecStart="{launcher}" prewarm' in body
     assert "WantedBy=default.target" in body
 
     detect = subprocess.run(
@@ -558,3 +638,128 @@ def test_grok_writer_replaces_unmarked_table_after_grok_config_rewrite(tmp_path)
     assert "ntfy.sh/mine" in text
     assert "/old/notify_agent.py" not in text
     assert "/new/notify_agent.py --grok" in text
+
+
+def test_detect_rejects_stale_grok_and_codex_attention_hook_paths(tmp_path):
+    """Old notify paths must remain absent so a default run migrates them."""
+    home = tmp_path / "home"
+    home.mkdir()
+    grok_config = home / ".grok/config.toml"
+    codex_hooks = home / ".codex/hooks.json"
+    grok_config.parent.mkdir(parents=True)
+    codex_hooks.parent.mkdir(parents=True)
+    grok_config.write_text(
+        "[[ui.notifications.hooks]]\n"
+        'command = "python3 /old/notify_agent.py --grok"\n'
+        'events = ["turn_complete"]\n',
+        encoding="utf-8",
+    )
+    codex_hooks.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PermissionRequest": [
+                        {
+                            "matcher": "",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python3 /old/notify_agent.py",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = {
+        "HOME": str(home),
+        "TTS_TARGET_HOME": str(home),
+        "TTS_LOG_DIR": str(tmp_path / "install-log"),
+        "GROK_CONFIG_FILE": str(grok_config),
+        "CODEX_HOOKS_FILE": str(codex_hooks),
+        "PATH": "/usr/bin:/bin",
+    }
+
+    detected = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--detect"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert detected.returncode == 0, detected.stderr
+    assert "grok_notify\tabsent" in detected.stdout
+    assert "codex_attention\tabsent" in detected.stdout
+
+
+def test_hook_commands_preserve_install_paths_with_spaces(tmp_path):
+    """Every hook format must keep a spaced notify-script path as one argument."""
+    home = tmp_path / "home with spaces"
+    home.mkdir()
+    env = {
+        "HOME": str(home),
+        "TTS_TARGET_HOME": str(home),
+        "TTS_SKIP_SYSTEMD": "1",
+        "ATTS_INSTALL_GPU_RUNTIME": "0",
+        "TTS_LOG_DIR": str(tmp_path / "install-log"),
+        "PATH": "/usr/bin:/bin",
+    }
+    selected = "codex_notify,codex_attention,grok_notify,claude_stop,cline_task_start,boot_prewarm"
+
+    installed = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--select", selected],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert installed.returncode == 0, installed.stderr
+    notify_script = home / ".local/share/codex-claude-tts-announcements/scripts/notify_agent.py"
+    codex = tomllib.loads((home / ".codex/config.toml").read_text(encoding="utf-8"))
+    assert codex["notify"] == ["python3", str(notify_script)]
+
+    codex_hooks = json.loads((home / ".codex/hooks.json").read_text(encoding="utf-8"))
+    codex_command = codex_hooks["hooks"]["PermissionRequest"][0]["hooks"][0]["command"]
+    assert str(notify_script) in shlex.split(codex_command)
+
+    claude = json.loads((home / ".claude/settings.json").read_text(encoding="utf-8"))
+    claude_command = claude["hooks"]["Stop"][0]["hooks"][0]["command"]
+    assert shlex.split(claude_command) == ["python3", str(notify_script)]
+
+    grok = tomllib.loads((home / ".grok/config.toml").read_text(encoding="utf-8"))
+    grok_command = grok["ui"]["notifications"]["hooks"][0]["command"]
+    assert str(notify_script) in shlex.split(grok_command)
+
+    cline_hook = home / ".cline/hooks/TaskStart"
+    hook_result = subprocess.run(
+        [str(cline_hook)],
+        input=json.dumps({"hookName": "agent_start", "workspaceRoots": [str(home)]}),
+        env={"HOME": str(home), "PATH": "/usr/bin:/bin", "ATTS_NO_AUDIO": "1"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert hook_result.returncode == 0, hook_result.stderr
+    assert json.loads(hook_result.stdout)["cancel"] is False
+
+    unit = (home / ".config/systemd/user/agent-tts-prewarm.service").read_text(encoding="utf-8")
+    assert f'ExecStart="{home / ".local/bin/agent-tts"}" prewarm' in unit
+
+    detected = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--detect"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert detected.returncode == 0, detected.stderr
+    for component in selected.split(","):
+        assert f"{component}\tinstalled" in detected.stdout

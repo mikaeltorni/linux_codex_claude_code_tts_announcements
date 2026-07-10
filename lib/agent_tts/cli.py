@@ -35,8 +35,13 @@ def _codex_home(args) -> Path:
 
 def cmd_voice(args) -> int:
     """Speak a literal line of text (the ``voice``/``say`` verb)."""
-    engine.speak(args.text, args.voice, _codex_home(args), play=not getattr(args, "no_play", False))
-    return 0
+    spoken = engine.speak(
+        args.text,
+        args.voice,
+        _codex_home(args),
+        play=not getattr(args, "no_play", False),
+    )
+    return 0 if spoken else 1
 
 
 def cmd_announce(args) -> int:
@@ -61,8 +66,7 @@ def cmd_announce(args) -> int:
     )
     if not text:
         return 0
-    engine.speak(text, args.voice, _codex_home(args), play=True)
-    return 0
+    return 0 if engine.speak(text, args.voice, _codex_home(args), play=True) else 1
 
 
 def cmd_clarify(args) -> int:
@@ -76,8 +80,7 @@ def cmd_clarify(args) -> int:
     )
     if not text:
         return 0
-    engine.speak(text, args.voice, _codex_home(args), play=True)
-    return 0
+    return 0 if engine.speak(text, args.voice, _codex_home(args), play=True) else 1
 
 
 def cmd_prewarm(args) -> int:

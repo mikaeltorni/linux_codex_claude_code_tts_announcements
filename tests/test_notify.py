@@ -2,6 +2,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
@@ -385,6 +387,28 @@ def test_context_uses_qwen_variables_for_direct_qwen_hook(monkeypatch):
     assert context.voice == "af_qwen"
     assert context.codex_home == Path.home() / ".codex-qwen"
     assert context.model_name == "qwen-model"
+
+
+@pytest.mark.parametrize(
+    ("kind", "voice", "home_name"),
+    (
+        ("openrouter", "af_jessica", ".codex-openrouter"),
+        ("nvidia", "af_sarah", ".codex-nvidia"),
+    ),
+)
+def test_context_routes_new_codex_variants_to_distinct_voice_and_home(
+    monkeypatch, kind, voice, home_name
+):
+    """Codex-compatible variants must not collapse onto Codex TTS metadata."""
+    monkeypatch.setenv("CODEX_AGENT_KIND", kind)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.delenv("CODEX__TTS_VOICE", raising=False)
+
+    context = notify.context_for({"cwd": "/repo/demo"}, "codex")
+
+    assert notify.runtime_kind("codex", "codex") == kind
+    assert context.voice == voice
+    assert context.codex_home == Path.home() / home_name
 
 
 def test_context_normalized_wrapper_voice_is_runtime_fallback(monkeypatch):

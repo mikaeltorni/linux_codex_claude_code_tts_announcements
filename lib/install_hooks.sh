@@ -32,7 +32,9 @@ tts_install_root() {
 
 # Build the command string written into Codex and Claude hook config.
 tts_hook_command() {
-  printf 'python3 %s/scripts/notify_agent.py' "$(tts_install_root)"
+  local script
+  script="$(tts_install_root)/scripts/notify_agent.py"
+  printf 'python3 %q' "$script"
 }
 
 # Resolve the user bin directory where the agent-tts launcher symlink is placed.
@@ -320,7 +322,7 @@ After=graphical-session.target
 
 [Service]
 Type=oneshot
-ExecStart=$bin/agent-tts prewarm
+ExecStart="$bin/agent-tts" prewarm
 # Warming is best-effort; never let a slow/failed synthesis stall the session.
 TimeoutStartSec=180
 Nice=10
@@ -345,11 +347,6 @@ EOF
 # tts_announcements.install_hooks so the exact generated content (and only that)
 # is stripped, preserving user-authored config.
 
-# tts_config_has - true when $1 (a config file) references the notify hook.
-tts_config_has() {
-  [ -f "$1" ] && grep -q 'notify_agent.py' "$1" 2>/dev/null
-}
-
 detect_engine()       { [ -e "$(tts_bin_dir)/agent-tts" ] || [ -f "$(tts_install_root)/scripts/agent-tts" ]; }
 detect_boot_prewarm() { [ -f "$(tts_systemd_user_dir)/agent-tts-prewarm.service" ]; }
 detect_hook_files()   { [ -f "$(tts_install_root)/scripts/notify_agent.py" ]; }
@@ -367,11 +364,65 @@ detect_codex_notify() {
   [ -f "$f" ] && grep -q 'BEGIN TTS ANNOUNCEMENTS NOTIFY' "$f" 2>/dev/null
 }
 # Grok rewrites its config.toml and may strip our comment markers, so detection
-# stays on the broader notify_agent.py reference (see tts_config_has).
-detect_grok_notify()  { tts_config_has "${GROK_CONFIG_FILE:-$(tts_target_home)/.grok/config.toml}"; }
+# parses the live TOML and compares shell arguments with the current managed
+# path instead of relying on either serialized escaping or a comment marker.
+detect_grok_notify() {
+  local f="${GROK_CONFIG_FILE:-$(tts_target_home)/.grok/config.toml}"
+  local managed; managed="$(tts_install_root)/scripts/notify_agent.py"
+  [ -f "$f" ] || return 1
+  python3 - "$f" "$managed" <<'PY'
+import shlex, sys, tomllib
+try:
+    with open(sys.argv[1], "rb") as handle:
+        data = tomllib.load(handle)
+except Exception:
+    sys.exit(1)
+entries = (((data.get("ui") or {}).get("notifications") or {}).get("hooks") or [])
+for entry in entries if isinstance(entries, list) else []:
+    if not isinstance(entry, dict):
+        continue
+    try:
+        arguments = shlex.split(str(entry.get("command", "")))
+    except ValueError:
+        continue
+    if sys.argv[2] in arguments:
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
+# Return true when one JSON hook event contains the exact current managed
+# notify-script path as a shell argument. Parsing avoids false negatives from
+# JSON escaping and false positives from a retired install path.
+_tts_json_has_event() {
+  local f="$1" event="$2" managed
+  managed="$(tts_install_root)/scripts/notify_agent.py"
+  [ -f "$f" ] || return 1
+  python3 - "$f" "$event" "$managed" <<'PY'
+import json, shlex, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    sys.exit(1)
+entries = ((data.get("hooks") or {}).get(sys.argv[2]) or [])
+for entry in entries if isinstance(entries, list) else []:
+    for hook in (entry.get("hooks") or []) if isinstance(entry, dict) else []:
+        if not isinstance(hook, dict):
+            continue
+        try:
+            arguments = shlex.split(str(hook.get("command", "")))
+        except ValueError:
+            continue
+        if sys.argv[3] in arguments:
+            sys.exit(0)
+sys.exit(1)
+PY
+}
+
 detect_codex_attention() {
   local f="${CODEX_HOOKS_FILE:-$(tts_target_home)/.codex/hooks.json}"
-  [ -f "$f" ] && grep -q 'PermissionRequest' "$f" 2>/dev/null && grep -q 'notify_agent.py' "$f" 2>/dev/null
+  _tts_json_has_event "$f" PermissionRequest
 }
 # A Claude event hook is present when settings.json registers *our managed*
 # command under that event. Match the current install-root notify_agent.py path
@@ -382,22 +433,7 @@ detect_codex_attention() {
 # event name.
 _tts_claude_has_event() {
   local event="$1" f="${CLAUDE_SETTINGS_FILE:-$(tts_target_home)/.claude/settings.json}"
-  [ -f "$f" ] || return 1
-  local managed; managed="$(tts_install_root)/scripts/notify_agent.py"
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 - "$f" "$event" "$managed" <<'PY'
-import json, sys
-try:
-    data = json.load(open(sys.argv[1]))
-except Exception:
-    sys.exit(1)
-event, managed = sys.argv[2], sys.argv[3]
-entries = (data.get("hooks") or {}).get(event) or []
-for entry in entries if isinstance(entries, list) else []:
-    for h in (entry.get("hooks") or []) if isinstance(entry, dict) else []:
-        if isinstance(h, dict) and managed in str(h.get("command", "")):
-            sys.exit(0)
-sys.exit(1)
-PY
+  _tts_json_has_event "$f" "$event"
 }
 detect_claude_session_start() { _tts_claude_has_event SessionStart; }
 detect_claude_stop()          { _tts_claude_has_event Stop; }

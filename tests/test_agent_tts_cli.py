@@ -98,6 +98,15 @@ def test_voice_speaks_composed_text(cli, monkeypatch):
     assert spoken == {"text": "hello there", "voice": "af_sky"}
 
 
+def test_speech_verbs_report_engine_failure(cli, monkeypatch):
+    """Direct callers must receive a nonzero status when no speech path works."""
+    monkeypatch.setattr(cli.engine, "speak", lambda *args, **kwargs: False)
+
+    assert cli.main(["voice", "--text", "hello", "--voice", "af_sky"]) == 1
+    assert cli.main(["announce", "--event", "start", "--voice", "af_sky"]) == 1
+    assert cli.main(["clarify", "--voice", "af_sky"]) == 1
+
+
 def test_announce_composes_finish_wording(cli, monkeypatch):
     """`announce` composes the shared wording before speaking."""
     spoken = {}

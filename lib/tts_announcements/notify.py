@@ -261,15 +261,25 @@ def project_name_from(payload: dict[str, Any]) -> str:
 def runtime_kind(default_label: str, label: str) -> str:
     """Resolve the agent kind for payload formats shared by multiple runtimes."""
     explicit = normalize_text(os.environ.get("CODEX_AGENT_KIND", "")).casefold()
-    if explicit in {"api", "claude", "cline", "codex", "grok", "qwen"}:
+    supported = {
+        "api",
+        "claude",
+        "cline",
+        "codex",
+        "grok",
+        "nvidia",
+        "openrouter",
+        "qwen",
+    }
+    if explicit in supported:
         return explicit
     normalized_label = normalize_text(label).casefold()
     if normalized_label.startswith(("local", "qwen")):
         return "qwen"
-    for kind in ("claude", "cline", "codex", "grok", "api"):
+    for kind in ("openrouter", "nvidia", "claude", "cline", "codex", "grok", "api"):
         if normalized_label.startswith(kind):
             return kind
-    return default_label if default_label in {"claude", "cline", "codex", "grok"} else "codex"
+    return default_label if default_label in supported else "codex"
 
 
 def voice_for_kind(kind: str) -> str:
@@ -309,14 +319,9 @@ def context_for(payload: dict[str, Any], default_label: str) -> RuntimeContext:
     label = normalize_text(os.environ.get("CODEX_AGENT_LABEL", "")) or default_label
     kind = runtime_kind(default_label, label)
     voice = voice_for_kind(kind)
-    default_home = Path.home() / {
-        "claude": ".claude",
-        "qwen": ".codex-qwen",
-        "api": ".codex-api",
-        "cline": ".cline",
-        "grok": ".grok",
-    }.get(kind, ".codex")
-    codex_home = Path(os.environ.get("CODEX_HOME") or default_home)
+    # Keep config/model-home selection on the engine's shared per-kind path so
+    # every Codex-compatible variant gains the same routing as voice selection.
+    codex_home = Path(tts_engine.codex_home_for_kind(kind, os.environ))
     model_name = normalize_text(
         os.environ.get("CODEX_AGENT_LMSTUDIO_MODEL", "")
         or (os.environ.get("QWEN_CODEX_LMSTUDIO_MODEL", "") if kind == "qwen" else "")
