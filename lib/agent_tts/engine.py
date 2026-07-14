@@ -81,8 +81,17 @@ FALSEY = {"0", "false", "no", "n", "off", "disabled"}
 DEFAULT_TTS_SPEED = 1.5
 DEFAULT_TTS_VOLUME_PERCENT = 1000.0
 LEGACY_DEFAULT_TTS_VOLUME_ENV = "125"
-DEFAULT_GPU_MIN_FREE_MIB = 1024
+# 1024 MiB proved to be zero headroom in production: with free_vram_mib=1024
+# Kokoro repeatedly produced empty CUDA output before the CPU retry rescued
+# it (voice.log 2026-07-04..07-13). 2048 keeps a real margin for auto mode.
+DEFAULT_GPU_MIN_FREE_MIB = 2048
 PLAYBACK_TIMEOUT_SECONDS = 120
+# Fallback synthesizers are a last resort for short phrases. When the audio
+# server is down, ``spd-say --wait`` blocks until timeout while holding the
+# playback lock, so every queued announcement serially burned the previous
+# 120s budget (voice.log 2026-07-13 02:15-02:23). Keep this small so a dead
+# audio stack degrades to a few seconds of delay, not minutes of frozen TTS.
+FALLBACK_TIMEOUT_SECONDS = 15
 KOKORO_TIMEOUT_SECONDS = 180
 STALE_SYNTHESIS_SECONDS = 60 * 60
 
@@ -774,6 +783,30 @@ def play_audio(audio_path: Path, ignore_silent: bool = False) -> bool:
     return False
 
 
+def _cancel_spd_queue() -> None:
+    """Best-effort cancel of all queued speech-dispatcher messages.
+
+    ``subprocess.run(timeout=...)`` kills the local ``spd-say`` client, but the
+    message it already submitted stays queued server-side. Without this cancel,
+    announcements abandoned while the audio server was down replay later as
+    stale ghost speech once audio recovers.
+    """
+    spd_path = shutil.which("spd-say")
+    if not spd_path:
+        return
+    try:
+        subprocess.run(
+            [spd_path, "--cancel"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        LOGGER.info("cancelled queued speech-dispatcher messages")
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        LOGGER.info(f"spd-say --cancel failed: {exc}")
+
+
 def fallback_speak(text: str, ignore_silent: bool = False) -> bool:
     """Speak text with a desktop fallback synthesizer (spd-say/espeak-ng).
 
@@ -802,14 +835,19 @@ def fallback_speak(text: str, ignore_silent: bool = False) -> bool:
                     check=False,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    timeout=PLAYBACK_TIMEOUT_SECONDS,
+                    timeout=FALLBACK_TIMEOUT_SECONDS,
                 )
             except subprocess.TimeoutExpired:
                 LOGGER.warning(
                     "%s fallback timed out after %ss",
                     cmd[0],
-                    PLAYBACK_TIMEOUT_SECONDS,
+                    FALLBACK_TIMEOUT_SECONDS,
                 )
+                if cmd[0] == "spd-say":
+                    # The killed client leaves its message queued inside
+                    # speech-dispatcher; cancel it so speech does not replay
+                    # as a stale ghost announcement once audio recovers.
+                    _cancel_spd_queue()
                 continue
             except OSError as exc:
                 LOGGER.info(f"{cmd[0]} fallback launch failed: {exc}")

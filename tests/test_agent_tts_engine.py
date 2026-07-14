@@ -256,7 +256,11 @@ def test_auto_device_uses_installed_cuda_runtime_with_vram_headroom(
     (runtime / "python/onnxruntime").mkdir(parents=True)
     (runtime / "nvidia/cudnn/lib").mkdir(parents=True)
     monkeypatch.setenv("ATTS_GPU_RUNTIME_DIR", str(runtime))
-    monkeypatch.setattr(engine, "gpu_free_memory_mib", lambda: 1536)
+    monkeypatch.setattr(
+        engine,
+        "gpu_free_memory_mib",
+        lambda: engine.DEFAULT_GPU_MIN_FREE_MIB + 512,
+    )
 
     assert engine.resolve_kokoro_device() == "cuda"
     env = engine.kokoro_subprocess_env(Path("/models"), "cuda")
@@ -637,3 +641,43 @@ def test_fallback_speak_waits_and_tries_the_second_synthesizer(
         ("spd-say", "--wait", "hello"),
         ("espeak-ng", "hello"),
     ]
+
+
+def test_fallback_speak_timeout_uses_short_budget_and_cancels_spd_queue(
+    engine, monkeypatch
+):
+    """A hung spd-say is bounded by the short fallback timeout and its queued
+    message is cancelled so it cannot replay later as stale ghost speech."""
+    monkeypatch.delenv("ATTS_NO_AUDIO", raising=False)
+    monkeypatch.setattr(engine.shutil, "which", lambda command: f"/usr/bin/{command}")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((tuple(command), kwargs.get("timeout")))
+        if command[0].endswith("spd-say") and "--cancel" in command:
+            return engine.subprocess.CompletedProcess(command, 0)
+        if command[0] == "spd-say":
+            raise engine.subprocess.TimeoutExpired(command, kwargs.get("timeout"))
+        return engine.subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(engine.subprocess, "run", fake_run)
+
+    assert engine.fallback_speak("hello") is True
+
+    assert calls[0] == (
+        ("spd-say", "--wait", "hello"),
+        engine.FALLBACK_TIMEOUT_SECONDS,
+    )
+    # The hung message must not survive in the speech-dispatcher queue.
+    assert calls[1][0] == ("/usr/bin/spd-say", "--cancel")
+    # espeak-ng still speaks the announcement after the cancel.
+    assert calls[2][0] == ("espeak-ng", "hello")
+    # The fallback budget stays far below the clip playback budget so a dead
+    # audio server cannot serially freeze queued announcements for minutes.
+    assert engine.FALLBACK_TIMEOUT_SECONDS <= 30
+    contents = (engine.LOG_DIR / "voice.log").read_text(encoding="utf-8")
+    assert (
+        f"spd-say fallback timed out after {engine.FALLBACK_TIMEOUT_SECONDS}s"
+        in contents
+    )
+    assert "cancelled queued speech-dispatcher messages" in contents
