@@ -585,3 +585,77 @@ def test_claude_hooks_prefer_the_tracker_launch_feature_key(monkeypatch, tmp_pat
 
     for args in calls:
         assert args[args.index("--feature-key") + 1] == "launch-777"
+
+
+def test_parse_payload_ignores_flag_arguments():
+    """Flag-style argv entries must not be mistaken for a Codex JSON payload.
+
+    Regression: invoking the hook as ``notify_agent.py --claude`` logged
+    ``invalid payload '--claude'`` and dropped the real stdin payload.
+    """
+    payload = notify.parse_payload(
+        ["notify_agent.py", "--claude"],
+        stdin_text='{"hook_event_name": "Stop"}',
+    )
+    assert payload == {"hook_event_name": "Stop"}
+
+
+def test_parse_payload_still_prefers_positional_json():
+    payload = notify.parse_payload(
+        ["notify_agent.py", '{"type": "agent-turn-complete"}'],
+        stdin_text=None,
+    )
+    assert payload == {"type": "agent-turn-complete"}
+
+
+def _context(**overrides):
+    base = dict(
+        label="claude",
+        project_name="demo",
+        project_path="/repo/demo",
+        voice="af_sky",
+        codex_home=Path("/home/user/.claude"),
+    )
+    base.update(overrides)
+    return notify.RuntimeContext(**base)
+
+
+def test_announce_clips_oversized_task_description(monkeypatch):
+    """Huge transcript prompts must not exceed the exec argv limit.
+
+    Regression: a multi-hundred-KB task description raised
+    ``[Errno 7] Argument list too long`` and the finish announcement died.
+    """
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+
+    assert notify.announce("finish", _context(), task_description="word " * 100_000)
+    spoken = calls[0][calls[0].index("--task-description") + 1]
+    assert len(spoken) <= notify.SPOKEN_TEXT_MAX
+    assert spoken.startswith("word word")
+
+
+def test_update_title_and_clarify_clip_oversized_text(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+
+    notify.update_title("p " * 200_000, _context())
+    notify.clarify(_context(), "q " * 200_000)
+    title = calls[0][calls[0].index("--prompt") + 1]
+    question = calls[1][calls[1].index("--question") + 1]
+    assert len(title) <= notify.SPOKEN_TEXT_MAX
+    assert len(question) <= notify.SPOKEN_TEXT_MAX
+
+
+def test_run_tracker_logs_arg_bytes_when_launch_fails(monkeypatch):
+    """An exec failure must record the payload size that caused it."""
+    logged = []
+    monkeypatch.setattr(notify.log, "error", lambda msg, **kw: logged.append(msg))
+
+    def boom(*args, **kwargs):
+        raise OSError(7, "Argument list too long")
+
+    monkeypatch.setattr(notify.subprocess, "run", boom)
+
+    assert notify.run_tracker(["announce", "--task-description", "x" * 64]) is False
+    assert logged and "arg bytes" in logged[0]

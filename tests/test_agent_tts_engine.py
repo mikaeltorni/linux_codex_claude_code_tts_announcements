@@ -681,3 +681,45 @@ def test_fallback_speak_timeout_uses_short_budget_and_cancels_spd_queue(
         in contents
     )
     assert "cancelled queued speech-dispatcher messages" in contents
+
+
+def test_workspace_x11_probe_backs_off_after_total_failure(engine, monkeypatch):
+    """A failing xprop environment is probed once, then skipped for the cooldown.
+
+    Regression: on desktops without EWMH properties every announcement ran
+    three failing ``xprop`` commands, spamming ``command failed rc=1`` lines
+    into voice.log on each 5-second poll.
+    """
+    monkeypatch.delenv("WINDOWID", raising=False)
+    calls = []
+    monkeypatch.setattr(
+        engine, "_capture_command", lambda cmd, timeout=1.0: calls.append(cmd) or ""
+    )
+    engine._X11_PROBE_FAILED_AT = None
+
+    assert engine.detect_terminal_workspace() == ""
+    xprop_first = sum(1 for cmd in calls if cmd[0] == "xprop")
+    assert xprop_first > 0
+
+    assert engine.detect_terminal_workspace() == ""
+    xprop_second = sum(1 for cmd in calls if cmd[0] == "xprop") - xprop_first
+    assert xprop_second == 0  # cooldown suppresses repeated probes
+
+
+def test_workspace_x11_probe_retries_after_cooldown_and_resets_on_success(
+    engine, monkeypatch
+):
+    monkeypatch.delenv("WINDOWID", raising=False)
+    outputs = {"xprop": "_NET_CURRENT_DESKTOP(CARDINAL) = 2"}
+    monkeypatch.setattr(
+        engine,
+        "_capture_command",
+        lambda cmd, timeout=1.0: outputs.get(cmd[0], ""),
+    )
+    # Failure recorded long ago: the cooldown has expired, probing resumes.
+    engine._X11_PROBE_FAILED_AT = (
+        engine.time.monotonic() - engine.X11_PROBE_RETRY_SECONDS - 1
+    )
+
+    assert engine.detect_terminal_workspace() == "3"
+    assert engine._X11_PROBE_FAILED_AT is None
