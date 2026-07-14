@@ -143,7 +143,13 @@ def run_tracker(args: list[str]) -> bool:
             stderr=subprocess.DEVNULL,
         )
     except Exception as exc:
-        log.error(f"tracker launch failed: {exc}", component=LOG_COMPONENT)
+        # Include the total argv size: the historical failure mode here was
+        # [Errno 7] Argument list too long from an unclipped transcript prompt.
+        arg_bytes = sum(len(arg.encode("utf-8", "replace")) for arg in args)
+        log.error(
+            f"tracker launch failed ({arg_bytes} arg bytes): {exc}",
+            component=LOG_COMPONENT,
+        )
         return False
     if result.returncode != 0:
         log.warn(
@@ -159,8 +165,11 @@ def parse_payload(argv: list[str], stdin_text: str | None = None) -> dict[str, A
     """Parse a Codex argv payload or Claude stdin payload.
 
     Args:
-        argv: Process argument vector; ``argv[1]`` is treated as a Codex JSON
-            payload when present and non-blank.
+        argv: Process argument vector; the first non-blank positional argument
+            is treated as a Codex JSON payload. Flag-style entries (leading
+            ``--``, e.g. ``--claude``) are routing options, never payloads —
+            treating them as JSON used to log ``invalid payload '--claude'``
+            and drop the real stdin payload.
         stdin_text: Optional pre-read stdin contents (used by tests). When
             ``None`` and no argv payload is present, stdin is read directly.
 
@@ -168,7 +177,11 @@ def parse_payload(argv: list[str], stdin_text: str | None = None) -> dict[str, A
         dict[str, Any]: The decoded JSON object, or an empty dict when no
         payload is present or the payload is not a JSON object.
     """
-    raw = argv[1] if len(argv) > 1 and argv[1].strip() else stdin_text
+    positional = next(
+        (arg for arg in argv[1:] if arg.strip() and not arg.startswith("--")),
+        None,
+    )
+    raw = positional if positional is not None else stdin_text
     if raw is None:
         try:
             raw = sys.stdin.read()
@@ -221,6 +234,31 @@ def normalize_text(value: str) -> str:
         leading/trailing whitespace removed.
     """
     return " ".join((value or "").split())
+
+
+#: Upper bound (characters) for free-text forwarded to the tracker as argv.
+#: These strings feed spoken announcements and terminal titles, so anything
+#: beyond a few hundred characters is noise — and unbounded text (e.g. a pasted
+#: file in a prompt) previously exceeded the kernel exec limit and killed the
+#: announcement with ``[Errno 7] Argument list too long``.
+SPOKEN_TEXT_MAX = 600
+
+
+def clip_text(value: str, limit: int = SPOKEN_TEXT_MAX) -> str:
+    """Normalize ``value`` and clip it to ``limit`` characters for argv safety.
+
+    Args:
+        value: Raw free text (prompt, task description, or question).
+        limit: Maximum length of the returned string.
+
+    Returns:
+        str: Whitespace-normalized text no longer than ``limit`` characters,
+        with a trailing ellipsis when truncation occurred.
+    """
+    text = normalize_text(value)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
 
 
 def workspace_path_from(payload: dict[str, Any]) -> str:
@@ -375,7 +413,7 @@ def announce(
     if feature_key:
         args.extend(["--feature-key", feature_key])
     if task_description:
-        args.extend(["--task-description", task_description])
+        args.extend(["--task-description", clip_text(task_description)])
     return run_tracker(args)
 
 
@@ -394,7 +432,7 @@ def clarify(context: RuntimeContext, question: str) -> bool:
         [
             "clarify",
             "--question",
-            question,
+            clip_text(question),
             "--project-name",
             context.project_name,
             "--project-path",
@@ -422,7 +460,7 @@ def update_title(prompt: str, context: RuntimeContext, feature_key: str = "") ->
     args = [
         "title",
         "--prompt",
-        normalize_text(prompt),
+        clip_text(prompt),
         "--project-path",
         context.project_path,
         "--codex-home",
@@ -473,7 +511,7 @@ def notify_turn_start(prompt: str = "") -> bool:
         log.debug("no run token; skipping turn-start", component=LOG_COMPONENT)
         return False
     args = ["turn-start", "--token", token]
-    normalized_prompt = normalize_text(prompt)
+    normalized_prompt = clip_text(prompt)
     if normalized_prompt:
         args.extend(["--prompt", normalized_prompt])
     return run_tracker(args)

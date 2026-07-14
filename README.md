@@ -126,7 +126,11 @@ and the OS page cache before the first agent turn speaks, so the first
 announcement no longer pays the cold ~6 s startup on the critical path.
 Warming is best-effort (`Nice=10`, no audio, always exits 0) and never stalls
 the session. Run `agent-tts prewarm` by hand to warm the current shell.
-- `ATTS_ANNOUNCE_WORKSPACE=0` — disable the spoken workspace suffix.
+- `ATTS_ANNOUNCE_WORKSPACE=0` — disable the spoken workspace suffix. On
+  desktops where every `xprop` workspace probe fails (e.g. GNOME on
+  Wayland without usable EWMH properties), probing automatically backs off
+  for 5 minutes after a fully-failed attempt instead of re-running failing
+  probes — and logging their failures — on every announcement.
 - `ATTS_ANNOUNCE_START`, `ATTS_ANNOUNCE_FINISH`, and
   `ATTS_ANNOUNCE_ATTENTION` — override the independently installed lifecycle
   categories. Their persisted values live in
@@ -145,6 +149,12 @@ directory, while installed integrations can override the sink with
 `ATTS_LOG_DIR` or `AGENT_COMMAND_CENTER_LOG_DIR`. The Bash installer mirrors its
 status messages to `install.log` under `TTS_LOG_DIR` or the repository `.log/`
 directory without changing its stdout output.
+
+Free text forwarded to `codex-agent-tracker` on its command line (prompts,
+task descriptions, attention questions) is whitespace-normalized and clipped
+to 600 characters before exec: these strings only feed spoken announcements
+and terminal titles, and unbounded text previously aborted the launch with
+`[Errno 7] Argument list too long`, silently dropping the announcement.
 
 ## Prerequisites
 

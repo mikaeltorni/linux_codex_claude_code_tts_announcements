@@ -453,6 +453,62 @@ def _xprop_desktop_index(args: list[str]) -> int | None:
     return index if index >= 0 else None
 
 
+#: Monotonic timestamp of the last fully-failed X11 workspace probe, or
+#: ``None`` when probing is (or may be) working. Desktops without usable EWMH
+#: properties (e.g. GNOME on Wayland) fail every ``xprop`` query; without this
+#: back-off each announcement re-ran three failing probes and spammed
+#: ``command failed rc=1`` lines into voice.log on every poll.
+_X11_PROBE_FAILED_AT: float | None = None
+
+#: Seconds to wait before re-attempting X11 workspace probing after a failure.
+X11_PROBE_RETRY_SECONDS = 300.0
+
+
+def _x11_workspace(window_id: str) -> str:
+    """Resolve the EWMH workspace via ``xprop``, with failure back-off.
+
+    Args:
+        window_id: Explicit X11 window id; falls back to ``$WINDOWID``.
+
+    Returns:
+        str: 1-based workspace number, or "" when undetectable (in which case
+        further probing is suppressed for :data:`X11_PROBE_RETRY_SECONDS`).
+    """
+    global _X11_PROBE_FAILED_AT
+    now = time.monotonic()
+    if (
+        _X11_PROBE_FAILED_AT is not None
+        and now - _X11_PROBE_FAILED_AT < X11_PROBE_RETRY_SECONDS
+    ):
+        return ""
+
+    wid = (window_id or os.environ.get("WINDOWID", "")).strip()
+    if wid:
+        index = _xprop_desktop_index(["-id", wid, "_NET_WM_DESKTOP"])
+        if index is not None:
+            _X11_PROBE_FAILED_AT = None
+            return str(index + 1)
+    active = _capture_command(["xprop", "-root", "_NET_ACTIVE_WINDOW"])
+    if "=" in active:
+        active_id = active.rsplit("=", 1)[1].strip().split(",")[0].strip()
+        if active_id and active_id not in {"0x0", "0"}:
+            index = _xprop_desktop_index(["-id", active_id, "_NET_WM_DESKTOP"])
+            if index is not None:
+                _X11_PROBE_FAILED_AT = None
+                return str(index + 1)
+    index = _xprop_desktop_index(["-root", "_NET_CURRENT_DESKTOP"])
+    if index is not None:
+        _X11_PROBE_FAILED_AT = None
+        return str(index + 1)
+
+    _X11_PROBE_FAILED_AT = now
+    LOGGER.info(
+        "x11 workspace detection unavailable; suppressing xprop probes for "
+        f"{X11_PROBE_RETRY_SECONDS:.0f}s"
+    )
+    return ""
+
+
 def detect_terminal_workspace(window_id: str = "") -> str:
     """Best-effort detection of the workspace hosting the CLI's terminal.
 
@@ -460,6 +516,9 @@ def detect_terminal_workspace(window_id: str = "") -> str:
     ``xprop``), sway (via ``swaymsg``), and Hyprland (via ``hyprctl``). On X11
     the CLI's own terminal window (``$WINDOWID``) is preferred, with the active
     window and the visible workspace as fallbacks. Returns "" when undetectable.
+    A fully-failed ``xprop`` environment is only re-probed every
+    :data:`X11_PROBE_RETRY_SECONDS` to keep unusable desktops from flooding the
+    log with per-announcement probe failures.
     """
     sway = _capture_command(["swaymsg", "-t", "get_workspaces"])
     if sway:
@@ -481,22 +540,7 @@ def detect_terminal_workspace(window_id: str = "") -> str:
         except (AttributeError, TypeError, ValueError) as exc:
             LOGGER.info(f"hypr workspace parse failed: {exc}")
 
-    wid = (window_id or os.environ.get("WINDOWID", "")).strip()
-    if wid:
-        index = _xprop_desktop_index(["-id", wid, "_NET_WM_DESKTOP"])
-        if index is not None:
-            return str(index + 1)
-    active = _capture_command(["xprop", "-root", "_NET_ACTIVE_WINDOW"])
-    if "=" in active:
-        active_id = active.rsplit("=", 1)[1].strip().split(",")[0].strip()
-        if active_id and active_id not in {"0x0", "0"}:
-            index = _xprop_desktop_index(["-id", active_id, "_NET_WM_DESKTOP"])
-            if index is not None:
-                return str(index + 1)
-    index = _xprop_desktop_index(["-root", "_NET_CURRENT_DESKTOP"])
-    if index is not None:
-        return str(index + 1)
-    return ""
+    return _x11_workspace(window_id)
 
 
 def agent_announcement_text(
