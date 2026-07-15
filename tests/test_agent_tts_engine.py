@@ -411,6 +411,122 @@ def test_play_audio_serializes_concurrent_players(engine, monkeypatch, tmp_path)
     assert maximum_active == 1
 
 
+def test_play_audio_coalesces_concurrent_identical_clips(engine, monkeypatch, tmp_path):
+    """A detached-process burst must play one copy of an identical clip."""
+    audio = tmp_path / "same.wav"
+    audio.write_bytes(b"same")
+    monkeypatch.delenv("ATTS_NO_AUDIO", raising=False)
+    monkeypatch.setattr(
+        engine.shutil,
+        "which",
+        lambda command: f"/usr/bin/{command}" if command == "pw-play" else None,
+    )
+    calls = []
+    start = threading.Barrier(2)
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        time.sleep(0.1)
+        return engine.subprocess.CompletedProcess(command, 0)
+
+    def play():
+        start.wait()
+        assert engine.play_audio(audio) is True
+
+    monkeypatch.setattr(engine.subprocess, "run", fake_run)
+    threads = [threading.Thread(target=play) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert calls == [["/usr/bin/pw-play", str(audio)]]
+    contents = (engine.LOG_DIR / "voice.log").read_text(encoding="utf-8")
+    assert "suppressed duplicate clip" in contents
+
+
+def test_detached_processes_coalesce_identical_clip(tmp_path):
+    """Independent hook processes must share the duplicate-playback decision."""
+    bin_dir = tmp_path / "bin"
+    state_dir = tmp_path / "state"
+    log_dir = tmp_path / "log"
+    audio = tmp_path / "same.wav"
+    call_log = tmp_path / "player-calls"
+    bin_dir.mkdir()
+    audio.write_bytes(b"same")
+    player = bin_dir / "pw-play"
+    player.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'play\\n' >> \"$PLAYER_CALL_LOG\"\n"
+        "sleep 0.2\n",
+        encoding="utf-8",
+    )
+    player.chmod(0o755)
+    env = os.environ.copy()
+    for name in tuple(env):
+        if name.startswith("ATTS_"):
+            env.pop(name)
+    env.update(
+        {
+            "ATTS_STATE_DIR": str(state_dir),
+            "ATTS_LOG_DIR": str(log_dir),
+            "ATTS_NO_AUDIO": "0",
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "PLAYER_CALL_LOG": str(call_log),
+            "PYTHONPATH": str(LIB),
+        }
+    )
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "from pathlib import Path; "
+            "from agent_tts.engine import play_audio; "
+            "raise SystemExit(0 if play_audio(Path(__import__('sys').argv[1])) else 1)"
+        ),
+        str(audio),
+    ]
+
+    processes = [subprocess.Popen(command, env=env) for _ in range(4)]
+
+    assert [process.wait(timeout=5) for process in processes] == [0, 0, 0, 0]
+    assert call_log.read_text(encoding="utf-8").splitlines() == ["play"]
+    contents = (log_dir / "voice.log").read_text(encoding="utf-8")
+    assert contents.count("suppressed duplicate clip") == 3
+
+
+def test_play_audio_allows_same_clip_after_duplicate_window(engine, monkeypatch, tmp_path):
+    """De-duplication must expire so a later real turn can repeat its wording."""
+    audio = tmp_path / "same.wav"
+    audio.write_bytes(b"same")
+    monkeypatch.delenv("ATTS_NO_AUDIO", raising=False)
+    monkeypatch.setattr(
+        engine.shutil,
+        "which",
+        lambda command: f"/usr/bin/{command}" if command == "pw-play" else None,
+    )
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return engine.subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(engine.subprocess, "run", fake_run)
+
+    assert engine.play_audio(audio) is True
+    identity = f"clip\0{audio.resolve()}"
+    marker = engine._playback_marker(identity)
+    expired = time.time() - engine.DUPLICATE_PLAYBACK_WINDOW_SECONDS - 1
+    os.utime(marker, (expired, expired))
+    assert engine.play_audio(audio) is True
+
+    assert calls == [
+        ["/usr/bin/pw-play", str(audio)],
+        ["/usr/bin/pw-play", str(audio)],
+    ]
+
+
 def test_concurrent_identical_synthesis_runs_kokoro_once(tmp_path):
     """Two detached copies requesting one cache key must share one synthesis."""
     bin_dir = tmp_path / "bin"
@@ -641,6 +757,35 @@ def test_fallback_speak_waits_and_tries_the_second_synthesizer(
         ("spd-say", "--wait", "hello"),
         ("espeak-ng", "hello"),
     ]
+
+
+def test_fallback_speak_coalesces_concurrent_identical_text(engine, monkeypatch):
+    """Fallback synthesis must not serialize duplicate text into a speech loop."""
+    monkeypatch.delenv("ATTS_NO_AUDIO", raising=False)
+    monkeypatch.setattr(engine.shutil, "which", lambda command: f"/usr/bin/{command}")
+    calls = []
+    start = threading.Barrier(2)
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        time.sleep(0.1)
+        return engine.subprocess.CompletedProcess(command, 0)
+
+    def speak():
+        start.wait()
+        assert engine.fallback_speak("same announcement") is True
+
+    monkeypatch.setattr(engine.subprocess, "run", fake_run)
+    threads = [threading.Thread(target=speak) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert calls == [("spd-say", "--wait", "same announcement")]
+    contents = (engine.LOG_DIR / "voice.log").read_text(encoding="utf-8")
+    assert "suppressed duplicate fallback" in contents
 
 
 def test_fallback_speak_timeout_uses_short_budget_and_cancels_spd_queue(

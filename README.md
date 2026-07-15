@@ -73,11 +73,14 @@ Detached agents can finish simultaneously. Cache generation is locked per
 utterance and published atomically, so identical requests share one complete
 WAV instead of racing over a partial file. Playback (including the desktop
 fallback synthesizers) is serialized across processes so announcements do not
-overlap or break the PipeWire/PulseAudio connection. Direct `voice`, `announce`,
-and `clarify` commands return nonzero when neither Kokoro nor a fallback can
-handle the message. Kokoro calls time out instead of holding a cache lock
-forever, and later runs remove abandoned temporary work directories after their
-safe age threshold.
+overlap or break the PipeWire/PulseAudio connection. Identical requests that
+arrive within one 30-second burst are coalesced at that shared playback boundary,
+so competing detached hooks cannot turn the lock into a queue that repeats the
+same clip; a later turn can still repeat the wording normally. Direct `voice`,
+`announce`, and `clarify` commands return nonzero when neither Kokoro nor a
+fallback can handle the message. Kokoro calls time out instead of holding a
+cache lock forever, and later runs remove abandoned temporary work directories
+after their safe age threshold.
 
 Tunables (env overrides win over the persisted values):
 

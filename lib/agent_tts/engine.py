@@ -86,6 +86,11 @@ LEGACY_DEFAULT_TTS_VOLUME_ENV = "125"
 # it (voice.log 2026-07-04..07-13). 2048 keeps a real margin for auto mode.
 DEFAULT_GPU_MIN_FREE_MIB = 2048
 PLAYBACK_TIMEOUT_SECONDS = 120
+# Detached tracker/hook processes can request the same announcement together.
+# The playback lock below preserves audio, but without a recent-success guard it
+# also turns every burst into a serialized loop. Thirty seconds coalesces one
+# burst while allowing a later, legitimate turn to repeat the same wording.
+DUPLICATE_PLAYBACK_WINDOW_SECONDS = 30.0
 # Fallback synthesizers are a last resort for short phrases. When the audio
 # server is down, ``spd-say --wait`` blocks until timeout while holding the
 # playback lock, so every queued announcement serially burned the previous
@@ -779,6 +784,70 @@ def _no_audio() -> bool:
     return False
 
 
+def _playback_marker(identity: str) -> Path:
+    """Return the shared recent-success marker for one playback identity.
+
+    Args:
+        identity: Stable clip or fallback-text identity. It is hashed so spoken
+            text and filesystem paths are not copied into state filenames.
+
+    Returns:
+        Path: Marker under the engine state directory, shared by every process.
+    """
+    fingerprint = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    return STATE_DIR / "playback-history" / f"{fingerprint}.played"
+
+
+def _recent_playback_succeeded(identity: str, requested_at: float) -> bool:
+    """Return whether an equivalent request already played in the burst window.
+
+    ``requested_at`` is captured before waiting for the global playback lock.
+    That detail keeps a duplicate suppressed even when a long queue means it
+    acquires the lock after the wall-clock window has elapsed.
+
+    Args:
+        identity: Stable clip or fallback-text identity.
+        requested_at: Wall-clock time when this playback request arrived.
+
+    Returns:
+        bool: ``True`` only when a successful matching playback is recent
+        relative to the original request.
+    """
+    marker = _playback_marker(identity)
+    try:
+        played_at = marker.stat().st_mtime
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        LOGGER.warning("duplicate playback marker read failed path=%s: %s", marker, exc)
+        return False
+
+    now = time.time()
+    if played_at > now:
+        # A wall-clock correction must not suppress this phrase indefinitely.
+        LOGGER.warning(
+            "ignoring future duplicate playback marker path=%s skew=%.3fs",
+            marker,
+            played_at - now,
+        )
+        return False
+    return played_at >= requested_at - DUPLICATE_PLAYBACK_WINDOW_SECONDS
+
+
+def _record_playback_success(identity: str) -> None:
+    """Persist a best-effort cross-process marker after successful playback.
+
+    Args:
+        identity: Stable clip or fallback-text identity used for de-duplication.
+    """
+    marker = _playback_marker(identity)
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except OSError as exc:
+        LOGGER.warning("duplicate playback marker write failed path=%s: %s", marker, exc)
+
+
 def play_audio(audio_path: Path, ignore_silent: bool = False) -> bool:
     """Play an audio file with the first available player.
 
@@ -794,8 +863,21 @@ def play_audio(audio_path: Path, ignore_silent: bool = False) -> bool:
         return True
     # Tracker announcements are detached processes and can finish together.
     # PipeWire/PulseAudio rejected overlapping bursts in production, so one
-    # global lock keeps each short clip intact and in announcement order.
+    # global lock keeps each short clip intact and in announcement order. The
+    # duplicate check must happen after acquiring it: every process then sees
+    # the successful marker written by the first request in its burst.
+    requested_at = time.time()
+    playback_identity = f"clip\0{audio_path.resolve()}"
     with _exclusive_file_lock(STATE_DIR / "playback.lock", "playback"):
+        if _recent_playback_succeeded(playback_identity, requested_at):
+            fingerprint = _playback_marker(playback_identity).stem[:12]
+            LOGGER.info(
+                "suppressed duplicate clip fingerprint=%s window=%ss path=%s",
+                fingerprint,
+                format(DUPLICATE_PLAYBACK_WINDOW_SECONDS, "g"),
+                audio_path,
+            )
+            return True
         for player in ("pw-play", "paplay", "aplay"):
             player_path = shutil.which(player)
             if not player_path:
@@ -821,6 +903,7 @@ def play_audio(audio_path: Path, ignore_silent: bool = False) -> bool:
                 LOGGER.info(f"{player} exception: {exc}")
                 continue
             if result.returncode == 0:
+                _record_playback_success(playback_identity)
                 LOGGER.info(f"played {audio_path} with {player}")
                 return True
             LOGGER.info(f"{player} failed rc={result.returncode}: {(result.stderr or '').strip()}")
@@ -868,7 +951,17 @@ def fallback_speak(text: str, ignore_silent: bool = False) -> bool:
         return True
     found = False
     commands = (("spd-say", "--wait", text), ("espeak-ng", text))
+    requested_at = time.time()
+    playback_identity = f"fallback\0{text}"
     with _exclusive_file_lock(STATE_DIR / "playback.lock", "fallback playback"):
+        if _recent_playback_succeeded(playback_identity, requested_at):
+            fingerprint = _playback_marker(playback_identity).stem[:12]
+            LOGGER.info(
+                "suppressed duplicate fallback fingerprint=%s window=%ss",
+                fingerprint,
+                format(DUPLICATE_PLAYBACK_WINDOW_SECONDS, "g"),
+            )
+            return True
         for cmd in commands:
             if not shutil.which(cmd[0]):
                 continue
@@ -897,6 +990,7 @@ def fallback_speak(text: str, ignore_silent: bool = False) -> bool:
                 LOGGER.info(f"{cmd[0]} fallback launch failed: {exc}")
                 continue
             if result.returncode == 0:
+                _record_playback_success(playback_identity)
                 LOGGER.info("fallback spoke with %s", cmd[0])
                 return True
             LOGGER.info("%s fallback failed rc=%s", cmd[0], result.returncode)
