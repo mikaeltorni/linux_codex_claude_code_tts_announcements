@@ -52,6 +52,9 @@ def cmd_announce(args) -> int:
     de-duplication remain the caller's responsibility; this verb speaks exactly
     the announcement described by its arguments.
     """
+    if engine.announcements_suppressed():
+        engine.LOGGER.info("%s announcement suppressed by ATTS_SUPPRESS_ANNOUNCEMENTS", args.event)
+        return 0
     if not engine.announcement_enabled(args.event):
         engine.LOGGER.info("%s announcement disabled by event settings", args.event)
         return 0
@@ -71,6 +74,9 @@ def cmd_announce(args) -> int:
 
 def cmd_clarify(args) -> int:
     """Speak the shared clarification question for an agent turn."""
+    if engine.announcements_suppressed():
+        engine.LOGGER.info("attention announcement suppressed by ATTS_SUPPRESS_ANNOUNCEMENTS")
+        return 0
     if not engine.announcement_enabled("attention"):
         engine.LOGGER.info("attention announcement disabled by event settings")
         return 0

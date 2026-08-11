@@ -30,6 +30,7 @@ def cli(tmp_path, monkeypatch):
         "ATTS_ANNOUNCE_ATTENTION",
         "ATTS_EVENT_CONFIG_FILE",
         "ATTS_NO_AUDIO",
+        "ATTS_SUPPRESS_ANNOUNCEMENTS",
         "AGENT_COMMAND_CENTER_TTS_SPEED",
         "AGENT_COMMAND_CENTER_TTS_VOLUME_PERCENT",
         "ACC_SILENT",
@@ -126,6 +127,27 @@ def test_announce_composes_finish_wording(cli, monkeypatch):
         == 0
     )
     assert spoken["text"] == "shipped the feature"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["announce", "--event", "finish", "--voice", "af_sky"],
+        ["clarify", "--voice", "af_sky"],
+    ],
+)
+def test_suppress_env_silences_direct_lifecycle_commands(cli, monkeypatch, command):
+    """The global suppression contract also covers direct agent-tts callers."""
+    spoken = []
+    monkeypatch.setenv("ATTS_SUPPRESS_ANNOUNCEMENTS", "1")
+    monkeypatch.setattr(
+        cli.engine,
+        "speak",
+        lambda *args, **kwargs: spoken.append((args, kwargs)) or True,
+    )
+
+    assert cli.main(command) == 0
+    assert spoken == []
 
 
 def test_lifecycle_and_attention_events_can_be_disabled(cli, monkeypatch, tmp_path):

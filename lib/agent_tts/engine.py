@@ -30,6 +30,7 @@ names are still honored as fallbacks so existing installs keep working:
   * ``ATTS_ANNOUNCE_FINISH``   enables/disables end announcements
   * ``ATTS_ANNOUNCE_ATTENTION`` enables/disables ask-for-input announcements
   * ``ATTS_EVENT_CONFIG_FILE`` overrides the installed event-settings file
+  * ``ATTS_SUPPRESS_ANNOUNCEMENTS`` suppresses lifecycle/attention speech
   * ``ATTS_NO_AUDIO``         (was ``CODEX_AGENT_TRACKER_NO_AUDIO``)
   * ``ATTS_STATE_DIR``        (was ``CODEX_AGENT_TRACKER_STATE_DIR``)
 
@@ -195,6 +196,11 @@ def event_config_file() -> Path:
     """Return the installer-managed lifecycle announcement settings file."""
     configured = os.environ.get("ATTS_EVENT_CONFIG_FILE", "").strip()
     return Path(configured).expanduser() if configured else Path.home() / ".config/agent-tts/announcements.env"
+
+
+def announcements_suppressed() -> bool:
+    """Return whether this process opted out of lifecycle/attention speech."""
+    return os.environ.get("ATTS_SUPPRESS_ANNOUNCEMENTS", "").strip().lower() in TRUTHY
 
 
 def announcement_enabled(event: str) -> bool:
