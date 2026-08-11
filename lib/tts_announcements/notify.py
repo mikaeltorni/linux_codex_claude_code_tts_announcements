@@ -70,7 +70,7 @@ def announcements_suppressed() -> bool:
     (otherwise every login announces a fake session such as
     "Project mk started" from the console's home-directory Claude window).
     """
-    return _env_flag("ATTS_SUPPRESS_ANNOUNCEMENTS")
+    return tts_engine.announcements_suppressed()
 
 
 @dataclass(frozen=True)
