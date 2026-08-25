@@ -480,6 +480,10 @@ def _xprop_desktop_index(args: list[str]) -> int | None:
 #: ``command failed rc=1`` lines into voice.log on every poll.
 _X11_PROBE_FAILED_AT: float | None = None
 
+#: Spoken clause used when the agent's workspace cannot be resolved, so a
+#: missing workspace is audible instead of silently absent.
+UNKNOWN_WORKSPACE_LABEL = "on an unknown workspace"
+
 #: Seconds to wait before re-attempting X11 workspace probing after a failure.
 X11_PROBE_RETRY_SECONDS = 300.0
 
@@ -756,7 +760,22 @@ def voice_for_kind(kind: str, env: dict[str, str]) -> str:
 
 
 def with_workspace_suffix(text: str, workspace: str | None = None) -> str:
-    """Append ``on workspace <N>`` to a spoken message (best-effort).
+    """Append ``on workspace <N>`` to a spoken message.
+
+    The workspace clause is always spoken (unless disabled): when the workspace
+    cannot be resolved the message says :data:`UNKNOWN_WORKSPACE_LABEL` rather
+    than silently dropping the clause. Background callers such as the ACC tmux
+    monitor run without ``DISPLAY``, so the desktop probe fails there; passing an
+    explicit ``workspace`` recorded at launch keeps those announcements accurate.
+
+    Args:
+        text: The spoken message to suffix.
+        workspace: Known workspace identifier. ``None`` probes the desktop; an
+            empty string skips the probe and speaks the unknown-workspace label.
+
+    Returns:
+        ``text`` with the workspace clause appended, or unchanged when empty or
+        when the feature is disabled.
 
     Set ``ATTS_ANNOUNCE_WORKSPACE=0`` (or legacy
     ``AGENT_COMMAND_CENTER_ANNOUNCE_WORKSPACE=0``) to disable.
@@ -769,7 +788,12 @@ def with_workspace_suffix(text: str, workspace: str | None = None) -> str:
     workspace = detect_terminal_workspace() if workspace is None else workspace
     workspace = (workspace or "").strip()
     if not workspace:
-        return text
+        LOGGER.info("workspace undetectable; announcing unknown-workspace wording")
+        suffix = UNKNOWN_WORKSPACE_LABEL
+        stripped = text.rstrip().rstrip(".")
+        if stripped.lower().endswith(suffix.lower()):
+            return text
+        return f"{stripped} {suffix}"
     suffix = f"on workspace {workspace}"
     stripped = text.rstrip().rstrip(".")
     if stripped.lower().endswith(suffix.lower()):
@@ -1339,14 +1363,31 @@ def default_codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
 
 
-def speak(text: str, voice: str, codex_home: Path | None = None, play: bool = True, ignore_silent: bool = False) -> bool:
+def speak(
+    text: str,
+    voice: str,
+    codex_home: Path | None = None,
+    play: bool = True,
+    ignore_silent: bool = False,
+    workspace: str | None = None,
+) -> bool:
     """Speak literal ``text``, appending the workspace suffix and falling back.
+
+    Args:
+        text: The literal message to speak.
+        voice: Kokoro voice id.
+        codex_home: Config directory holding the model assets.
+        play: Whether to actually play the audio.
+        ignore_silent: Speak even when announcements are muted.
+        workspace: Known workspace for the suffix; ``None`` probes the desktop.
+            Callers without a usable ``DISPLAY`` (background monitors) should
+            pass the workspace recorded when the agent launched.
 
     Returns True when Kokoro handled it; on failure a desktop synthesizer speaks
     the same text (unless playback is disabled).
     """
     home = codex_home or default_codex_home()
-    spoken = with_workspace_suffix(text)
+    spoken = with_workspace_suffix(text, workspace)
     if speak_with_kokoro(spoken, voice, home, play=play, ignore_silent=ignore_silent):
         return True
     if play:

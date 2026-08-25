@@ -328,6 +328,45 @@ def test_workspace_suffix_disabled(engine):
     assert engine.with_workspace_suffix("Project X started") == "Project X started"
 
 
+def test_workspace_suffix_uses_explicit_workspace(engine, monkeypatch):
+    """An explicitly supplied workspace is spoken without probing the desktop."""
+    monkeypatch.setenv("ATTS_ANNOUNCE_WORKSPACE", "1")
+
+    def unexpected_probe(window_id: str = "") -> str:
+        raise AssertionError("explicit workspace must not trigger a desktop probe")
+
+    monkeypatch.setattr(engine, "detect_terminal_workspace", unexpected_probe)
+    assert (
+        engine.with_workspace_suffix("Project mk stopped", workspace="4")
+        == "Project mk stopped on workspace 4"
+    )
+
+
+def test_workspace_suffix_says_unknown_when_undetectable(engine, monkeypatch):
+    """Announcements always carry a workspace clause, even when detection fails.
+
+    Regression: background monitors run without DISPLAY, so the probe returned
+    "" and the suffix was silently dropped -- announcements from those code
+    paths never told the listener where the agent was.
+    """
+    monkeypatch.setenv("ATTS_ANNOUNCE_WORKSPACE", "1")
+    monkeypatch.setattr(engine, "detect_terminal_workspace", lambda window_id="": "")
+    assert (
+        engine.with_workspace_suffix("Project mk stopped")
+        == "Project mk stopped on an unknown workspace"
+    )
+
+
+def test_workspace_suffix_not_duplicated_when_already_present(engine, monkeypatch):
+    """Re-suffixing an already-suffixed message is a no-op for both variants."""
+    monkeypatch.setenv("ATTS_ANNOUNCE_WORKSPACE", "1")
+    monkeypatch.setattr(engine, "detect_terminal_workspace", lambda window_id="": "")
+    already = "Project mk stopped on an unknown workspace"
+    assert engine.with_workspace_suffix(already) == already
+    numbered = "Project mk stopped on workspace 4"
+    assert engine.with_workspace_suffix(numbered, workspace="4") == numbered
+
+
 def test_announcement_wording(engine):
     """Start/finish/clarify wording matches the shared phrasing."""
     assert engine.agent_announcement_text("codex", "demo", "start") == "Project demo started"
