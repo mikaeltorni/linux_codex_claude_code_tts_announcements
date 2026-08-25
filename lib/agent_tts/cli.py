@@ -35,11 +35,13 @@ def _codex_home(args) -> Path:
 
 def cmd_voice(args) -> int:
     """Speak a literal line of text (the ``voice``/``say`` verb)."""
+    workspace = getattr(args, "workspace", None)
     spoken = engine.speak(
         args.text,
         args.voice,
         _codex_home(args),
         play=not getattr(args, "no_play", False),
+        workspace=workspace,
     )
     return 0 if spoken else 1
 
@@ -195,6 +197,15 @@ def build_parser() -> argparse.ArgumentParser:
         voice.add_argument("--voice", required=True)
         voice.add_argument("--codex-home", default=default_home)
         voice.add_argument("--no-play", action="store_true")
+        voice.add_argument(
+            "--workspace",
+            default=None,
+            help=(
+                "workspace to announce; omit to probe the desktop. Background "
+                "callers without DISPLAY should pass the workspace recorded "
+                "when the agent launched."
+            ),
+        )
         voice.set_defaults(func=cmd_voice)
 
     announce = sub.add_parser("announce", help="speak the shared start/finish wording")
