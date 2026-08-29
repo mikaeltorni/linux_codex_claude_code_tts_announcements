@@ -2,11 +2,13 @@ import json
 import shlex
 import shutil
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "lib"))
 
 
 def test_standalone_checkout_clones_private_component_framework(tmp_path):
@@ -237,6 +239,75 @@ def test_single_hook_component_installs_core_and_only_that_hook(tmp_path):
     settings = json.loads(claude_settings.read_text(encoding="utf-8"))
     assert list(settings["hooks"].keys()) == ["Stop"]
     assert not codex_config.exists()
+
+
+def test_codex_hooks_migrate_every_existing_account_home(tmp_path):
+    """Primary and numbered Codex homes must share the lifecycle contract."""
+    home = tmp_path / "home"
+    primary = home / ".codex"
+    secondary = home / ".codex-account-2"
+    for codex_home in (primary, secondary):
+        codex_home.mkdir(parents=True)
+        (codex_home / "config.toml").write_text(
+            '# BEGIN TTS ANNOUNCEMENTS NOTIFY (generated)\n'
+            'notify = ["python3", "/old/notify_agent.py"]\n'
+            '# END TTS ANNOUNCEMENTS NOTIFY (generated)\n\n'
+            '[tui]\nstatus_line = ["keep"]\n',
+            encoding="utf-8",
+        )
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "install.sh"),
+            "--select",
+            "codex_notify,codex_attention",
+        ],
+        cwd=ROOT,
+        env={
+            "HOME": str(home),
+            "TTS_TARGET_HOME": str(home),
+            "TTS_SKIP_SYSTEMD": "1",
+            "ATTS_INSTALL_GPU_RUNTIME": "0",
+            "TTS_LOG_DIR": str(tmp_path / "install-log"),
+            "PATH": "/usr/bin:/bin",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    for codex_home in (primary, secondary):
+        config = (codex_home / "config.toml").read_text(encoding="utf-8")
+        assert "notify_agent.py" not in config
+        assert 'status_line = ["keep"]' in config
+        hooks = json.loads((codex_home / "hooks.json").read_text(encoding="utf-8"))
+        assert set(hooks["hooks"]) == {"UserPromptSubmit", "Stop", "PermissionRequest"}
+
+    secondary_hooks_file = secondary / "hooks.json"
+    secondary_hooks = json.loads(secondary_hooks_file.read_text(encoding="utf-8"))
+    secondary_hooks["hooks"].pop("PermissionRequest")
+    secondary_hooks_file.write_text(
+        json.dumps(secondary_hooks, indent=2) + "\n", encoding="utf-8"
+    )
+    detected = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--detect"],
+        cwd=ROOT,
+        env={
+            "HOME": str(home),
+            "TTS_TARGET_HOME": str(home),
+            "TTS_SKIP_SYSTEMD": "1",
+            "TTS_LOG_DIR": str(tmp_path / "detect-log"),
+            "PATH": "/usr/bin:/bin",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert detected.returncode == 0, detected.stderr
+    assert "codex_notify\tinstalled" in detected.stdout
+    assert "codex_attention\tabsent" in detected.stdout
 
 
 def test_boot_prewarm_installs_enabled_systemd_user_unit(tmp_path):

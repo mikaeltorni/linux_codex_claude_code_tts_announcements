@@ -217,34 +217,74 @@ ensure_tts_core() {
   install_tts_hook_files
 }
 
-# Migrate Codex from the response-level notify callback to lifecycle hooks.
-configure_codex_notify_block() {
-  local home config_file hooks_file command lifecycle_command
-  home="$(tts_target_home)"
-  config_file="${CODEX_CONFIG_FILE:-$home/.codex/config.toml}"
-  hooks_file="${CODEX_HOOKS_FILE:-$home/.codex/hooks.json}"
-  command="$(tts_hook_command)"
+_tts_configure_codex_lifecycle_home() {
+  local codex_home="$1" command="$2" config_file hooks_file lifecycle_command
+  config_file="$codex_home/config.toml"
+  hooks_file="$codex_home/hooks.json"
   lifecycle_command="env CODEX_AGENT_KIND=codex CODEX_AGENT_LABEL=codex $command"
-  ensure_tts_core
-  mkdir -p "$(dirname "$config_file")" "$(dirname "$hooks_file")"
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks remove-codex "$config_file"
+  mkdir -p "$codex_home"
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+    remove-codex "$config_file"
   PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
     codex-hooks "$hooks_file" "$lifecycle_command" UserPromptSubmit Stop
   tts_msg "Configured Codex UserPromptSubmit/Stop hooks in $hooks_file"
 }
 
-# Merge the Codex PermissionRequest attention hook in hooks.json.
-configure_codex_attention_hook() {
-  local home hooks_file command attention_command
+# Migrate Codex from the response-level notify callback to lifecycle hooks.
+configure_codex_notify_block() {
+  local home command codex_home config_file hooks_file lifecycle_command
   home="$(tts_target_home)"
-  hooks_file="${CODEX_HOOKS_FILE:-$home/.codex/hooks.json}"
   command="$(tts_hook_command)"
-  attention_command="env CODEX_AGENT_KIND=codex CODEX_AGENT_LABEL=codex $command"
   ensure_tts_core
-  mkdir -p "$(dirname "$hooks_file")"
+  if [ -n "${CODEX_CONFIG_FILE:-}${CODEX_HOOKS_FILE:-}" ]; then
+    config_file="${CODEX_CONFIG_FILE:-$home/.codex/config.toml}"
+    hooks_file="${CODEX_HOOKS_FILE:-$home/.codex/hooks.json}"
+    lifecycle_command="env CODEX_AGENT_KIND=codex CODEX_AGENT_LABEL=codex $command"
+    mkdir -p "$(dirname "$config_file")" "$(dirname "$hooks_file")"
+    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+      remove-codex "$config_file"
+    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+      codex-hooks "$hooks_file" "$lifecycle_command" UserPromptSubmit Stop
+    tts_msg "Configured Codex UserPromptSubmit/Stop hooks in $hooks_file"
+    return
+  fi
+  _tts_configure_codex_lifecycle_home "$home/.codex" "$command"
+  for codex_home in "$home"/.codex-account-*; do
+    [ -d "$codex_home" ] || continue
+    _tts_configure_codex_lifecycle_home "$codex_home" "$command"
+  done
+}
+
+_tts_configure_codex_attention_home() {
+  local codex_home="$1" command="$2" hooks_file attention_command
+  hooks_file="$codex_home/hooks.json"
+  attention_command="env CODEX_AGENT_KIND=codex CODEX_AGENT_LABEL=codex $command"
+  mkdir -p "$codex_home"
   PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
     codex-hooks "$hooks_file" "$attention_command" PermissionRequest
   tts_msg "Configured Codex attention hook in $hooks_file"
+}
+
+# Merge the Codex PermissionRequest attention hook in hooks.json.
+configure_codex_attention_hook() {
+  local home hooks_file command attention_command codex_home
+  home="$(tts_target_home)"
+  command="$(tts_hook_command)"
+  ensure_tts_core
+  if [ -n "${CODEX_HOOKS_FILE:-}" ]; then
+    hooks_file="$CODEX_HOOKS_FILE"
+    attention_command="env CODEX_AGENT_KIND=codex CODEX_AGENT_LABEL=codex $command"
+    mkdir -p "$(dirname "$hooks_file")"
+    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+      codex-hooks "$hooks_file" "$attention_command" PermissionRequest
+    tts_msg "Configured Codex attention hook in $hooks_file"
+    return
+  fi
+  _tts_configure_codex_attention_home "$home/.codex" "$command"
+  for codex_home in "$home"/.codex-account-*; do
+    [ -d "$codex_home" ] || continue
+    _tts_configure_codex_attention_home "$codex_home" "$command"
+  done
 }
 
 # Register one Claude Code lifecycle event's notify hook. Each event is its own
@@ -360,14 +400,31 @@ detect_finish_voice()    { [ "$(tts_event_setting ATTS_ANNOUNCE_FINISH)" = 1 ]; 
 detect_attention_voice() { [ "$(tts_event_setting ATTS_ANNOUNCE_ATTENTION)" = 1 ]; }
 # Codex start/finish is installed only when both authoritative lifecycle events
 # use the current notify script and no legacy response-level notify remains.
-detect_codex_notify() {
-  local config_file="${CODEX_CONFIG_FILE:-$(tts_target_home)/.codex/config.toml}"
-  local hooks_file="${CODEX_HOOKS_FILE:-$(tts_target_home)/.codex/hooks.json}"
+_tts_detect_codex_lifecycle_files() {
+  local config_file="$1" hooks_file="$2"
   if [ -f "$config_file" ] && grep -q 'notify_agent\.py' "$config_file" 2>/dev/null; then
     return 1
   fi
   _tts_json_has_event "$hooks_file" UserPromptSubmit \
     && _tts_json_has_event "$hooks_file" Stop
+}
+
+detect_codex_notify() {
+  local home config_file hooks_file codex_home
+  home="$(tts_target_home)"
+  if [ -n "${CODEX_CONFIG_FILE:-}${CODEX_HOOKS_FILE:-}" ]; then
+    config_file="${CODEX_CONFIG_FILE:-$home/.codex/config.toml}"
+    hooks_file="${CODEX_HOOKS_FILE:-$home/.codex/hooks.json}"
+    _tts_detect_codex_lifecycle_files "$config_file" "$hooks_file"
+    return
+  fi
+  _tts_detect_codex_lifecycle_files "$home/.codex/config.toml" "$home/.codex/hooks.json" \
+    || return 1
+  for codex_home in "$home"/.codex-account-*; do
+    [ -d "$codex_home" ] || continue
+    _tts_detect_codex_lifecycle_files "$codex_home/config.toml" "$codex_home/hooks.json" \
+      || return 1
+  done
 }
 # Grok rewrites its config.toml and may strip our comment markers, so detection
 # parses the live TOML and compares shell arguments with the current managed
@@ -427,8 +484,18 @@ PY
 }
 
 detect_codex_attention() {
-  local f="${CODEX_HOOKS_FILE:-$(tts_target_home)/.codex/hooks.json}"
-  _tts_json_has_event "$f" PermissionRequest
+  local home hooks_file codex_home
+  home="$(tts_target_home)"
+  if [ -n "${CODEX_HOOKS_FILE:-}" ]; then
+    _tts_json_has_event "$CODEX_HOOKS_FILE" PermissionRequest
+    return
+  fi
+  hooks_file="$home/.codex/hooks.json"
+  _tts_json_has_event "$hooks_file" PermissionRequest || return 1
+  for codex_home in "$home"/.codex-account-*; do
+    [ -d "$codex_home" ] || continue
+    _tts_json_has_event "$codex_home/hooks.json" PermissionRequest || return 1
+  done
 }
 # A Claude event hook is present when settings.json registers *our managed*
 # command under that event. Match the current install-root notify_agent.py path
@@ -494,18 +561,42 @@ uninstall_hook_files() {
         "$(tts_install_root)/scripts/notify_agent.py"
 }
 uninstall_codex_notify() {
-  local config_file="${CODEX_CONFIG_FILE:-$(tts_target_home)/.codex/config.toml}"
-  local hooks_file="${CODEX_HOOKS_FILE:-$(tts_target_home)/.codex/hooks.json}"
-  tts_msg "Removing Codex lifecycle hooks from $hooks_file"
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks remove-codex "$config_file"
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
-    remove-codex-hooks "$hooks_file" UserPromptSubmit Stop
+  local home config_file hooks_file codex_home
+  home="$(tts_target_home)"
+  if [ -n "${CODEX_CONFIG_FILE:-}${CODEX_HOOKS_FILE:-}" ]; then
+    config_file="${CODEX_CONFIG_FILE:-$home/.codex/config.toml}"
+    hooks_file="${CODEX_HOOKS_FILE:-$home/.codex/hooks.json}"
+    tts_msg "Removing Codex lifecycle hooks from $hooks_file"
+    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks remove-codex "$config_file"
+    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+      remove-codex-hooks "$hooks_file" UserPromptSubmit Stop
+    return
+  fi
+  for codex_home in "$home/.codex" "$home"/.codex-account-*; do
+    [ -d "$codex_home" ] || continue
+    tts_msg "Removing Codex lifecycle hooks from $codex_home/hooks.json"
+    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+      remove-codex "$codex_home/config.toml"
+    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+      remove-codex-hooks "$codex_home/hooks.json" UserPromptSubmit Stop
+  done
 }
 uninstall_codex_attention() {
-  local f="${CODEX_HOOKS_FILE:-$(tts_target_home)/.codex/hooks.json}"
-  tts_msg "Removing Codex attention hook from $f"
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
-    remove-codex-hooks "$f" PermissionRequest
+  local home hooks_file codex_home
+  home="$(tts_target_home)"
+  if [ -n "${CODEX_HOOKS_FILE:-}" ]; then
+    hooks_file="$CODEX_HOOKS_FILE"
+    tts_msg "Removing Codex attention hook from $hooks_file"
+    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+      remove-codex-hooks "$hooks_file" PermissionRequest
+    return
+  fi
+  for codex_home in "$home/.codex" "$home"/.codex-account-*; do
+    [ -d "$codex_home" ] || continue
+    tts_msg "Removing Codex attention hook from $codex_home/hooks.json"
+    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+      remove-codex-hooks "$codex_home/hooks.json" PermissionRequest
+  done
 }
 uninstall_grok_notify() {
   local f="${GROK_CONFIG_FILE:-$(tts_target_home)/.grok/config.toml}"
