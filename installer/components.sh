@@ -23,7 +23,7 @@ ISC_COMPONENTS=(
   "start_voice|Start voice announcements|on|install_start_voice|detect_start_voice|uninstall_start_voice|Voice events"
   "finish_voice|End voice announcements|on|install_finish_voice|detect_finish_voice|uninstall_finish_voice|Voice events"
   "attention_voice|Ask-for-further-changes voice announcements|on|install_attention_voice|detect_attention_voice|uninstall_attention_voice|Voice events"
-  "codex_notify|Codex lifecycle notify block (config.toml)|on|configure_codex_notify_block|detect_codex_notify|uninstall_codex_notify|Codex hooks"
+  "codex_notify|Codex start/finish lifecycle hooks (hooks.json)|on|configure_codex_notify_block|detect_codex_notify|uninstall_codex_notify|Codex hooks"
   "codex_attention|Codex PermissionRequest attention hook (hooks.json)|on|configure_codex_attention_hook|detect_codex_attention|uninstall_codex_attention|Codex hooks"
   "grok_notify|Grok lifecycle and attention hooks (config.toml)|on|configure_grok_notify_hook|detect_grok_notify|uninstall_grok_notify|Grok hooks"
   "claude_session_start|Claude Code SessionStart hook|on|configure_claude_session_start_hook|detect_claude_session_start|uninstall_claude_session_start|Claude Code hooks"

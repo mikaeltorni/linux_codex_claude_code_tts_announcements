@@ -166,7 +166,8 @@ def test_installer_writes_config_hooks_without_replacing_binaries(tmp_path):
     # logging_utils backs the relative import in notify.py; it must ship too.
     assert (install_root / "lib/tts_announcements/logging_utils.py").is_file()
     written_codex = codex_config.read_text(encoding="utf-8")
-    assert "BEGIN TTS ANNOUNCEMENTS NOTIFY" in written_codex
+    assert "BEGIN TTS ANNOUNCEMENTS NOTIFY" not in written_codex
+    assert "notify =" not in written_codex
     assert "/old/notify_agent.py" not in written_codex
     assert "[tui]" in written_codex
     assert not (tmp_path / "codex.real").exists()
@@ -178,6 +179,14 @@ def test_installer_writes_config_hooks_without_replacing_binaries(tmp_path):
     assert any("CODEX_AGENT_LABEL=codex" in command for command in permission_commands)
     assert any("CODEX_AGENT_KIND=codex" in command for command in permission_commands)
     assert any("notify_agent.py" in command for command in permission_commands)
+    for event in ("UserPromptSubmit", "Stop"):
+        lifecycle_commands = [
+            hook["command"]
+            for entry in installed_codex_hooks["hooks"][event]
+            for hook in entry["hooks"]
+        ]
+        assert any("CODEX_AGENT_KIND=codex" in command for command in lifecycle_commands)
+        assert any("notify_agent.py" in command for command in lifecycle_commands)
 
     settings = json.loads(claude_settings.read_text(encoding="utf-8"))
     stop_commands = [hook["command"] for entry in settings["hooks"]["Stop"] for hook in entry["hooks"]]
@@ -697,6 +706,46 @@ def test_detect_rejects_stale_grok_and_codex_attention_hook_paths(tmp_path):
     assert "codex_attention\tabsent" in detected.stdout
 
 
+def test_codex_lifecycle_hook_removal_preserves_attention_and_user_hooks(tmp_path):
+    """Start/finish and attention components must uninstall independently."""
+    from tts_announcements import install_hooks
+
+    hooks_file = tmp_path / "hooks.json"
+    hooks_file.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "UserPromptSubmit": [
+                        {
+                            "matcher": "",
+                            "hooks": [{"type": "command", "command": "echo keep"}],
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    lifecycle = "env CODEX_AGENT_KIND=codex python3 /managed/notify_agent.py"
+    attention = "env CODEX_AGENT_LABEL=codex python3 /managed/notify_agent.py"
+
+    install_hooks.configure_codex_hooks(
+        hooks_file, lifecycle, ["UserPromptSubmit", "Stop"]
+    )
+    install_hooks.configure_codex_hooks(hooks_file, attention, ["PermissionRequest"])
+    install_hooks.remove_codex_hooks(hooks_file, ["UserPromptSubmit", "Stop"])
+
+    hooks = json.loads(hooks_file.read_text(encoding="utf-8"))["hooks"]
+    prompt_commands = [
+        hook["command"]
+        for entry in hooks["UserPromptSubmit"]
+        for hook in entry["hooks"]
+    ]
+    assert prompt_commands == ["echo keep"]
+    assert "Stop" not in hooks
+    assert "PermissionRequest" in hooks
+
+
 def test_hook_commands_preserve_install_paths_with_spaces(tmp_path):
     """Every hook format must keep a spaced notify-script path as one argument."""
     home = tmp_path / "home with spaces"
@@ -722,12 +771,13 @@ def test_hook_commands_preserve_install_paths_with_spaces(tmp_path):
 
     assert installed.returncode == 0, installed.stderr
     notify_script = home / ".local/share/codex-claude-tts-announcements/scripts/notify_agent.py"
-    codex = tomllib.loads((home / ".codex/config.toml").read_text(encoding="utf-8"))
-    assert codex["notify"] == ["python3", str(notify_script)]
+    codex_config = home / ".codex/config.toml"
+    assert not codex_config.exists() or "notify =" not in codex_config.read_text(encoding="utf-8")
 
     codex_hooks = json.loads((home / ".codex/hooks.json").read_text(encoding="utf-8"))
-    codex_command = codex_hooks["hooks"]["PermissionRequest"][0]["hooks"][0]["command"]
-    assert str(notify_script) in shlex.split(codex_command)
+    for event in ("UserPromptSubmit", "Stop", "PermissionRequest"):
+        codex_command = codex_hooks["hooks"][event][0]["hooks"][0]["command"]
+        assert str(notify_script) in shlex.split(codex_command)
 
     claude = json.loads((home / ".claude/settings.json").read_text(encoding="utf-8"))
     claude_command = claude["hooks"]["Stop"][0]["hooks"][0]["command"]

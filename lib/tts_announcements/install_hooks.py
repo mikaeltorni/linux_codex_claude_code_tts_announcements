@@ -1,8 +1,8 @@
 """Install-time config writers for Codex and Claude Code TTS hooks.
 
 Components:
-  - configure_codex_notify: Write the generated Codex notify block.
-  - configure_codex_hooks: Merge the Codex attention lifecycle hook.
+  - configure_codex_notify: Remove or migrate the legacy Codex notify block.
+  - configure_codex_hooks: Merge named Codex lifecycle hooks.
   - configure_claude_hooks: Merge generated Claude hook commands.
   - build_parser: Construct the install-hook CLI argument parser.
   - main: CLI entrypoint used by lib/install_hooks.sh.
@@ -100,8 +100,10 @@ def configure_codex_notify(config_file: Path, command: str) -> None:
 
 
 @log.log_call(LOGGER)
-def configure_codex_hooks(hooks_file: Path, command: str) -> None:
-    """Merge a Codex ``PermissionRequest`` attention hook.
+def configure_codex_hooks(
+    hooks_file: Path, command: str, events: tuple[str, ...] | list[str] | None = None
+) -> None:
+    """Merge generated handlers for named Codex lifecycle events.
 
     Existing hook events and user-authored handlers are preserved. A previously
     generated attention handler is replaced so repeated installs remain
@@ -110,6 +112,8 @@ def configure_codex_hooks(hooks_file: Path, command: str) -> None:
     Args:
         hooks_file: User-level Codex ``hooks.json`` path.
         command: Hook command that reads the lifecycle payload from stdin.
+        events: Event names to update; defaults to ``PermissionRequest`` for
+            backward compatibility with the original attention-only writer.
     """
     settings = _read_settings(hooks_file)
     hooks = settings.setdefault("hooks", {})
@@ -117,38 +121,42 @@ def configure_codex_hooks(hooks_file: Path, command: str) -> None:
         hooks = {}
         settings["hooks"] = hooks
 
-    event = "PermissionRequest"
-    entries = hooks.get(event, [])
-    if not isinstance(entries, list):
-        entries = []
-    kept = []
-    for entry in entries:
-        if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
-            kept.append(entry)
-            continue
-        handlers = [
-            handler
-            for handler in entry["hooks"]
-            if not (
-                isinstance(handler, dict)
-                and _is_generated_notify_command(handler.get("command"))
-            )
-        ]
-        if handlers:
-            updated = dict(entry)
-            updated["hooks"] = handlers
-            kept.append(updated)
+    selected_events = tuple(events or ("PermissionRequest",))
+    for event in selected_events:
+        entries = hooks.get(event, [])
+        if not isinstance(entries, list):
+            entries = []
+        kept = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+                kept.append(entry)
+                continue
+            handlers = [
+                handler
+                for handler in entry["hooks"]
+                if not (
+                    isinstance(handler, dict)
+                    and _is_generated_notify_command(handler.get("command"))
+                )
+            ]
+            if handlers:
+                updated = dict(entry)
+                updated["hooks"] = handlers
+                kept.append(updated)
 
-    kept.append(
-        {
-            "matcher": "",
-            "hooks": [{"type": "command", "command": command, "timeout": 10}],
-        }
-    )
-    hooks[event] = kept
+        kept.append(
+            {
+                "matcher": "",
+                "hooks": [{"type": "command", "command": command, "timeout": 10}],
+            }
+        )
+        hooks[event] = kept
     hooks_file.parent.mkdir(parents=True, exist_ok=True)
     hooks_file.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-    log.info(f"merged Codex attention hook into {hooks_file}", component=LOG_COMPONENT)
+    log.info(
+        f"merged Codex hooks events={','.join(selected_events)} into {hooks_file}",
+        component=LOG_COMPONENT,
+    )
 
 
 @log.log_call(LOGGER)
@@ -464,14 +472,18 @@ def remove_codex_notify(config_file: Path) -> None:
 
 
 @log.log_call(LOGGER)
-def remove_codex_hooks(hooks_file: Path) -> None:
-    """Remove the generated Codex ``PermissionRequest`` attention handler.
+def remove_codex_hooks(
+    hooks_file: Path, events: tuple[str, ...] | list[str] | None = None
+) -> None:
+    """Remove generated handlers for named Codex lifecycle events.
 
     Preserves user-authored handlers and other events; drops the event key when
     nothing else uses it. The inverse of :func:`configure_codex_hooks`.
 
     Args:
         hooks_file: User-level Codex ``hooks.json`` path.
+        events: Event names to clean; defaults to ``PermissionRequest`` for
+            backward compatibility with the original attention-only remover.
     """
     try:
         settings = _read_settings(hooks_file)
@@ -480,35 +492,39 @@ def remove_codex_hooks(hooks_file: Path) -> None:
     hooks = settings.get("hooks")
     if not isinstance(hooks, dict):
         return
-    event = "PermissionRequest"
-    entries = hooks.get(event, [])
-    if not isinstance(entries, list):
-        return
-    kept = []
-    for entry in entries:
-        if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
-            kept.append(entry)
+    selected_events = tuple(events or ("PermissionRequest",))
+    for event in selected_events:
+        entries = hooks.get(event, [])
+        if not isinstance(entries, list):
             continue
-        handlers = [
-            handler
-            for handler in entry["hooks"]
-            if not (
-                isinstance(handler, dict)
-                and _is_generated_notify_command(handler.get("command"))
-            )
-        ]
-        if handlers:
-            updated = dict(entry)
-            updated["hooks"] = handlers
-            kept.append(updated)
-    if kept:
-        hooks[event] = kept
-    else:
-        hooks.pop(event, None)
+        kept = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+                kept.append(entry)
+                continue
+            handlers = [
+                handler
+                for handler in entry["hooks"]
+                if not (
+                    isinstance(handler, dict)
+                    and _is_generated_notify_command(handler.get("command"))
+                )
+            ]
+            if handlers:
+                updated = dict(entry)
+                updated["hooks"] = handlers
+                kept.append(updated)
+        if kept:
+            hooks[event] = kept
+        else:
+            hooks.pop(event, None)
     if not hooks:
         settings.pop("hooks", None)
     hooks_file.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-    log.info(f"removed Codex attention hook from {hooks_file}", component=LOG_COMPONENT)
+    log.info(
+        f"removed Codex hooks events={','.join(selected_events)} from {hooks_file}",
+        component=LOG_COMPONENT,
+    )
 
 
 @log.log_call(LOGGER)
@@ -563,6 +579,7 @@ def build_parser() -> argparse.ArgumentParser:
     codex_hooks = subcommands.add_parser("codex-hooks")
     codex_hooks.add_argument("hooks_file", type=Path)
     codex_hooks.add_argument("command")
+    codex_hooks.add_argument("events", nargs="*")
 
     claude = subcommands.add_parser("claude")
     claude.add_argument("settings_file", type=Path)
@@ -595,6 +612,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     rm_codex_hooks = subcommands.add_parser("remove-codex-hooks")
     rm_codex_hooks.add_argument("hooks_file", type=Path)
+    rm_codex_hooks.add_argument("events", nargs="*")
 
     rm_claude = subcommands.add_parser("remove-claude")
     rm_claude.add_argument("settings_file", type=Path)
@@ -621,7 +639,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command_name == "codex":
         configure_codex_notify(args.config_file, args.command)
     elif args.command_name == "codex-hooks":
-        configure_codex_hooks(args.hooks_file, args.command)
+        configure_codex_hooks(args.hooks_file, args.command, args.events)
     elif args.command_name == "claude":
         configure_claude_hooks(args.settings_file, args.command, args.events)
     elif args.command_name == "cline":
@@ -633,7 +651,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command_name == "remove-codex":
         remove_codex_notify(args.config_file)
     elif args.command_name == "remove-codex-hooks":
-        remove_codex_hooks(args.hooks_file)
+        remove_codex_hooks(args.hooks_file, args.events)
     elif args.command_name == "remove-claude":
         remove_claude_hooks(args.settings_file, args.command, args.events)
     elif args.command_name == "remove-cline":
