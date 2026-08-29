@@ -10,13 +10,82 @@ sys.path.insert(0, str(ROOT / "lib"))
 from tts_announcements import notify
 
 
-def test_codex_turn_complete_uses_tracker_token(monkeypatch):
+def test_codex_lifecycle_hooks_start_and_finish_tracker_turn(monkeypatch):
+    calls = []
+    monkeypatch.setenv("ATTS_LIFECYCLE_TRACKED", "1")
+    monkeypatch.setenv("CODEX_AGENT_RUN_ID", "codex-123")
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+
+    assert notify.handle_codex(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "turn_id": "turn-1",
+            "prompt": "fix the race",
+            "cwd": "/repo",
+        }
+    ) == 0
+    assert notify.handle_codex(
+        {"hook_event_name": "Stop", "turn_id": "turn-1", "cwd": "/repo"}
+    ) == 0
+
+    assert calls[0] == [
+        "turn-start",
+        "--token",
+        "codex-123",
+        "--turn-id",
+        "turn-1",
+        "--prompt",
+        "fix the race",
+    ]
+    assert calls[1][:2] == ["title", "--prompt"]
+    assert calls[2] == [
+        "turn-complete",
+        "--status",
+        "0",
+        "--token",
+        "codex-123",
+        "--turn-id",
+        "turn-1",
+    ]
+
+
+def test_codex_legacy_notify_completion_is_ignored(monkeypatch):
+    """The response-level notify callback can fire between tool calls."""
     calls = []
     monkeypatch.setenv("CODEX_AGENT_RUN_ID", "codex-123")
     monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
 
     assert notify.handle_codex({"type": "agent-turn-complete", "status": 0}) == 0
-    assert calls == [["turn-complete", "--status", "0", "--token", "codex-123"]]
+
+    assert calls == []
+
+
+def test_main_routes_codex_hook_payload_by_runtime_kind(monkeypatch):
+    calls = []
+    monkeypatch.setenv("CODEX_AGENT_KIND", "codex")
+    monkeypatch.setenv("ATTS_LIFECYCLE_TRACKED", "1")
+    monkeypatch.setenv("CODEX_AGENT_RUN_ID", "codex-123")
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+
+    payload = json.dumps(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "turn_id": "turn-9",
+            "prompt": "start now",
+            "cwd": "/repo",
+        }
+    )
+    assert notify.main(["notify_agent.py"], stdin_text=payload) == 0
+
+    assert calls[0] == [
+        "turn-start",
+        "--token",
+        "codex-123",
+        "--turn-id",
+        "turn-9",
+        "--prompt",
+        "start now",
+    ]
 
 
 def test_claude_stop_routes_finish_announcement(monkeypatch, tmp_path):

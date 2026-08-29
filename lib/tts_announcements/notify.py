@@ -1,8 +1,9 @@
 """Shared notify hook logic for Codex, Claude Code, and Cline.
 
-The module accepts Codex notify JSON as the first CLI argument and Claude/Cline
-hook JSON on stdin. It delegates speech and title updates to
-``codex-agent-tracker`` so announcement wording remains centralized there.
+The module accepts legacy Codex notify JSON as the first CLI argument and
+Codex/Claude/Cline lifecycle hook JSON on stdin. It delegates speech and title
+updates to ``codex-agent-tracker`` so announcement wording remains centralized
+there.
 
 Components:
   - RuntimeContext: Immutable resolved metadata for one hook event.
@@ -477,11 +478,12 @@ def update_title(prompt: str, context: RuntimeContext, feature_key: str = "") ->
     return run_tracker(args)
 
 
-def notify_turn_complete(status: int = 0) -> bool:
+def notify_turn_complete(status: int = 0, turn_id: str = "") -> bool:
     """Tell the tracker that a directly tracked Codex turn completed.
 
     Args:
         status: Exit status of the completed turn; ``0`` indicates success.
+        turn_id: Optional lifecycle turn identifier used to reject stale hooks.
 
     Returns:
         bool: ``True`` when the tracker reported success. ``False`` when no
@@ -492,15 +494,20 @@ def notify_turn_complete(status: int = 0) -> bool:
     if not token:
         log.debug("no run token; skipping turn-complete", component=LOG_COMPONENT)
         return False
-    return run_tracker(["turn-complete", "--status", str(status), "--token", token])
+    args = ["turn-complete", "--status", str(status), "--token", token]
+    normalized_turn_id = normalize_text(turn_id)
+    if normalized_turn_id:
+        args.extend(["--turn-id", normalized_turn_id])
+    return run_tracker(args)
 
 
-def notify_turn_start(prompt: str = "") -> bool:
+def notify_turn_start(prompt: str = "", turn_id: str = "") -> bool:
     """Tell the tracker that a new turn started in a tracked session.
 
     Args:
         prompt: Optional user prompt text for per-turn integrations such as
             phrase_automation commit mark-done.
+        turn_id: Optional lifecycle turn identifier used to deduplicate hooks.
 
     Returns:
         bool: ``True`` when the tracker reported success. ``False`` when no
@@ -511,6 +518,9 @@ def notify_turn_start(prompt: str = "") -> bool:
         log.debug("no run token; skipping turn-start", component=LOG_COMPONENT)
         return False
     args = ["turn-start", "--token", token]
+    normalized_turn_id = normalize_text(turn_id)
+    if normalized_turn_id:
+        args.extend(["--turn-id", normalized_turn_id])
     normalized_prompt = clip_text(prompt)
     if normalized_prompt:
         args.extend(["--prompt", normalized_prompt])
@@ -568,7 +578,7 @@ def transcript_prompt(transcript_path: str) -> str:
 
 
 def handle_codex(payload: dict[str, Any]) -> int:
-    """Handle Codex notify payloads.
+    """Handle Codex lifecycle hooks and ignore unsafe legacy completion callbacks.
 
     Args:
         payload: Decoded Codex notify JSON object.
@@ -576,14 +586,35 @@ def handle_codex(payload: dict[str, Any]) -> int:
     Returns:
         int: Always ``0`` (hook exit code; notify hooks never fail the run).
     """
-    event_type = payload.get("type")
+    event = normalize_text(str(payload.get("hook_event_name") or payload.get("type") or ""))
+    turn_id = normalize_text(str(payload.get("turn_id", "")))
     context = context_for(payload, "codex")
+    feature_key = runtime_feature_key(
+        normalize_text(str(payload.get("session_id") or payload.get("conversation_id") or ""))
+    )
     log.info(
-        f"{context.label} type={event_type} cwd={payload.get('cwd')}",
+        f"{context.label} event={event} turn_id={turn_id or '-'} cwd={payload.get('cwd')}",
         component=LOG_COMPONENT,
     )
-    if event_type == "agent-turn-complete":
-        notify_turn_complete(int(payload.get("status", 0) or 0))
+    if event == "UserPromptSubmit":
+        prompt = str(payload.get("prompt", ""))
+        if not (lifecycle_is_tracker_managed() and notify_turn_start(prompt, turn_id)):
+            announce("start", context, feature_key=feature_key)
+        update_title(prompt, context, feature_key=feature_key)
+    elif event == "Stop":
+        if not (
+            lifecycle_is_tracker_managed()
+            and notify_turn_complete(int(payload.get("status", 0) or 0), turn_id)
+        ):
+            announce("finish", context, feature_key=feature_key)
+    elif event == "PermissionRequest":
+        message = normalize_text(str(payload.get("message", "")))
+        clarify(context, message or f"{context.label.capitalize()} needs your attention")
+    elif event == "agent-turn-complete":
+        # Codex's legacy notify callback is response-level, not lifecycle-level:
+        # it may fire while the same turn continues into another tool call. A
+        # Stop hook is the authoritative completion signal.
+        log.debug("ignoring legacy response-level completion callback", component=LOG_COMPONENT)
     return 0
 
 
@@ -614,7 +645,9 @@ def handle_claude(payload: dict[str, Any]) -> int:
         # session watch reads Codex-family JSONL, never Claude transcripts).
         # Forward Stop as a turn completion so the tracker speaks the finish;
         # only fall back to speaking directly when no run token exists.
-        if event in {"Stop", "SubagentStop"} and not notify_turn_complete():
+        if event in {"Stop", "SubagentStop"} and not notify_turn_complete(
+            turn_id=str(payload.get("turn_id", ""))
+        ):
             task = transcript_prompt(str(payload.get("transcript_path", "")))
             announce("finish", context, task_description=task, feature_key=feature_key)
         else:
@@ -641,7 +674,9 @@ def handle_claude(payload: dict[str, Any]) -> int:
         if lifecycle_is_tracker_managed():
             # Re-arm the tracker's per-turn finish dedupe (and let it speak a
             # follow-up "started") so the next Stop announces again.
-            notify_turn_start(str(payload.get("prompt", "")))
+            notify_turn_start(
+                str(payload.get("prompt", "")), str(payload.get("turn_id", ""))
+            )
         update_title(str(payload.get("prompt", "")), context, feature_key=feature_key)
     elif event in {"Notification", "PermissionRequest"}:
         raw_message = normalize_text(str(payload.get("message", "")))
@@ -813,6 +848,10 @@ def main(argv: list[str] | None = None, stdin_text: str | None = None) -> int:
         return 0
     if "hookName" in payload:
         return handle_cline(payload)
+    if "hook_event_name" in payload and runtime_kind(
+        "claude", os.environ.get("CODEX_AGENT_LABEL", "")
+    ) == "codex":
+        return handle_codex(payload)
     if "hook_event_name" in payload:
         return handle_claude(payload)
     return handle_codex(payload)

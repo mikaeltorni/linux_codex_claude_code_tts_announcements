@@ -3,11 +3,11 @@
 
 This thin wrapper puts the repository ``lib`` directory on ``sys.path`` and
 delegates to :func:`tts_announcements.notify.main`. It is the script configured
-as the ``notify`` command for Codex and as the hook command for Claude Code.
+for Codex, Claude Code, and Cline lifecycle hooks.
 
 Usage:
-    # Codex passes its notify JSON as argv[1]:
-    python3 notify_agent.py '{"type": "agent-turn-complete", "status": 0}'
+    # Codex lifecycle hooks pass JSON on stdin:
+    echo '{"hook_event_name": "UserPromptSubmit", "turn_id": "t1"}' | python3 notify_agent.py
 
     # Claude Code passes its hook JSON on stdin:
     echo '{"hook_event_name": "Stop"}' | python3 notify_agent.py
