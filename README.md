@@ -52,9 +52,11 @@ When installed, this repo:
 - installs a hash-locked ONNX Runtime CUDA target when an NVIDIA GPU and `uv`
   are available; CPU synthesis remains the fallback
 - copies hook code to `$HOME/.local/share/codex-claude-tts-announcements/`
-- adds Codex `UserPromptSubmit` and `Stop` lifecycle hooks to `$HOME/.codex/hooks.json`
-- removes the retired response-level Codex `notify = [...]` callback from `$HOME/.codex/config.toml`
-- adds a Codex `PermissionRequest` attention hook to `$HOME/.codex/hooks.json`
+- adds Codex `UserPromptSubmit` and `Stop` lifecycle hooks to the primary
+  `$HOME/.codex` home and every existing `$HOME/.codex-account-N` home
+- removes the retired response-level Codex `notify = [...]` callback from each
+  corresponding `config.toml`
+- adds a Codex `PermissionRequest` attention hook to every managed Codex home
 - adds generated Claude Code hook commands to `$HOME/.claude/settings.json`
 - adds executable Cline lifecycle hooks under `$HOME/.cline/hooks/`
 - removes the retired Agent Command Center `notify_agent.py` hook entries
@@ -200,8 +202,8 @@ that core**, so the program works no matter which subset you pick.
 | `start_voice` | enable start announcements for every runtime |
 | `finish_voice` | enable end announcements for every runtime |
 | `attention_voice` | enable ask-for-further-changes / needs-input announcements |
-| `codex_notify` | Codex `UserPromptSubmit` start and `Stop` finish hooks in `~/.codex/hooks.json` (and legacy `notify` migration) |
-| `codex_attention` | Codex `PermissionRequest` attention hook in `~/.codex/hooks.json` |
+| `codex_notify` | Codex `UserPromptSubmit` start and `Stop` finish hooks in primary and numbered account homes (and legacy `notify` migration) |
+| `codex_attention` | Codex `PermissionRequest` attention hook in primary and numbered account homes |
 | `grok_notify` | Grok `[[ui.notifications.hooks]]` lifecycle block in `~/.grok/config.toml` (start/finish/attention via `$GROK_EVENT`) |
 | `claude_session_start` | Claude Code `SessionStart` hook |
 | `claude_stop` | Claude Code `Stop` hook |
