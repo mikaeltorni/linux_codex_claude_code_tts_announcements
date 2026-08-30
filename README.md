@@ -54,8 +54,9 @@ When installed, this repo:
 - copies hook code to `$HOME/.local/share/codex-claude-tts-announcements/`
 - adds Codex `UserPromptSubmit` and `Stop` lifecycle hooks to the primary
   `$HOME/.codex` home and every existing `$HOME/.codex-account-N` home
-- runs Codex `Stop` speech as a background hook so completion audio cannot hold
-  up or fail the completed turn
+- runs Codex `Stop` speech as a background hook and detaches again inside the
+  notifier, so completion audio cannot hold up either new sessions or sessions
+  that cached an older foreground hook definition
 - removes the retired response-level Codex `notify = [...]` callback from each
   corresponding `config.toml`
 - adds a Codex `PermissionRequest` attention hook to every managed Codex home

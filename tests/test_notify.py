@@ -677,6 +677,80 @@ def test_parse_payload_still_prefers_positional_json():
     assert payload == {"type": "agent-turn-complete"}
 
 
+def test_main_detaches_codex_stop_before_tracker_work(monkeypatch):
+    """A cached foreground Stop hook must return before tracker/TTS work runs."""
+    launches = []
+
+    class Child:
+        pid = 4321
+
+    def launch(command, **kwargs):
+        launches.append((command, kwargs))
+        return Child()
+
+    monkeypatch.setenv("CODEX_AGENT_KIND", "codex")
+    monkeypatch.delenv("ATTS_CODEX_STOP_BACKGROUND", raising=False)
+    monkeypatch.setattr(notify.subprocess, "Popen", launch)
+    monkeypatch.setattr(
+        notify,
+        "handle_codex",
+        lambda payload: pytest.fail("foreground process handled Codex Stop"),
+    )
+
+    payload = {"hook_event_name": "Stop", "turn_id": "turn-stale"}
+    assert notify.main(["/installed/notify_agent.py"], json.dumps(payload)) == 0
+
+    command, kwargs = launches[0]
+    assert command == [
+        sys.executable,
+        "/installed/notify_agent.py",
+        json.dumps(payload, separators=(",", ":")),
+    ]
+    assert kwargs["stdin"] is notify.subprocess.DEVNULL
+    assert kwargs["stdout"] is notify.subprocess.DEVNULL
+    assert kwargs["stderr"] is notify.subprocess.DEVNULL
+    assert kwargs["start_new_session"] is True
+    assert kwargs["close_fds"] is True
+    assert kwargs["env"]["ATTS_CODEX_STOP_BACKGROUND"] == "1"
+
+
+def test_detached_codex_stop_child_handles_payload_without_recursing(monkeypatch):
+    """The detached child marker must route Stop normally instead of re-forking."""
+    handled = []
+    monkeypatch.setenv("CODEX_AGENT_KIND", "codex")
+    monkeypatch.setenv("ATTS_CODEX_STOP_BACKGROUND", "1")
+    monkeypatch.setattr(notify, "handle_codex", lambda payload: handled.append(payload) or 0)
+    monkeypatch.setattr(
+        notify.subprocess,
+        "Popen",
+        lambda *args, **kwargs: pytest.fail("detached child attempted to re-fork"),
+    )
+
+    payload = {"hook_event_name": "Stop", "turn_id": "turn-child"}
+    assert notify.main(["/installed/notify_agent.py"], json.dumps(payload)) == 0
+    assert handled == [payload]
+
+
+def test_codex_stop_detach_failure_logs_and_falls_back(monkeypatch):
+    """A worker launch failure must remain observable without dropping Stop."""
+    handled = []
+    errors = []
+
+    def fail_to_launch(*args, **kwargs):
+        raise OSError("fork unavailable")
+
+    monkeypatch.setenv("CODEX_AGENT_KIND", "codex")
+    monkeypatch.delenv("ATTS_CODEX_STOP_BACKGROUND", raising=False)
+    monkeypatch.setattr(notify.subprocess, "Popen", fail_to_launch)
+    monkeypatch.setattr(notify.log, "error", lambda message, **kwargs: errors.append(message))
+    monkeypatch.setattr(notify, "handle_codex", lambda payload: handled.append(payload) or 0)
+
+    payload = {"hook_event_name": "Stop", "turn_id": "turn-fallback"}
+    assert notify.main(["/installed/notify_agent.py"], json.dumps(payload)) == 0
+    assert handled == [payload]
+    assert errors == ["failed to detach Codex Stop worker: fork unavailable"]
+
+
 def _context(**overrides):
     base = dict(
         label="claude",

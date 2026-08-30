@@ -774,6 +774,8 @@ def handle_cline(payload: dict[str, Any]) -> int:
 
 #: Grok notification-hook events that mean "the agent finished working".
 GROK_FINISH_EVENTS = {"turn_complete", "task_complete", "agent_error"}
+#: Recursion guard inherited only by the detached Codex Stop worker.
+CODEX_STOP_BACKGROUND_ENV = "ATTS_CODEX_STOP_BACKGROUND"
 
 
 def handle_grok(environ: dict[str, str] | None = None) -> int:
@@ -824,6 +826,52 @@ def handle_grok(environ: dict[str, str] | None = None) -> int:
     return 0
 
 
+def detach_codex_stop(argv: list[str], payload: dict[str, Any]) -> bool:
+    """Launch one isolated worker for a Codex Stop payload.
+
+    Codex snapshots hook settings when a session starts, so sessions already
+    running during an installer update can retain the old foreground 10-second
+    timeout. The foreground notifier therefore performs a second protection:
+    it passes the decoded payload to a detached copy of itself and returns
+    immediately. Standard streams are disconnected so Codex observes EOF as
+    soon as the parent exits, and a marker prevents the worker from re-forking.
+
+    Args:
+        argv: Current notifier argument vector; ``argv[0]`` identifies the
+            installed entrypoint the worker must execute.
+        payload: Decoded Codex Stop hook payload to process in the worker.
+
+    Returns:
+        bool: ``True`` when the worker started. ``False`` on launch failure so
+        the caller can fall back to foreground handling instead of losing TTS.
+    """
+    child_env = os.environ.copy()
+    child_env[CODEX_STOP_BACKGROUND_ENV] = "1"
+    entrypoint = str(Path(argv[0]).expanduser().resolve())
+    compact_payload = json.dumps(payload, separators=(",", ":"))
+    try:
+        child = subprocess.Popen(
+            [sys.executable, entrypoint, compact_payload],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+            env=child_env,
+        )
+    except OSError as exc:
+        log.error(
+            f"failed to detach Codex Stop worker: {exc}",
+            component=LOG_COMPONENT,
+        )
+        return False
+    log.info(
+        f"detached Codex Stop worker pid={child.pid}",
+        component=LOG_COMPONENT,
+    )
+    return True
+
+
 def main(argv: list[str] | None = None, stdin_text: str | None = None) -> int:
     """CLI entry point for both Codex and Claude hook styles.
 
@@ -848,9 +896,14 @@ def main(argv: list[str] | None = None, stdin_text: str | None = None) -> int:
         return 0
     if "hookName" in payload:
         return handle_cline(payload)
-    if "hook_event_name" in payload and runtime_kind(
+    codex_lifecycle = "hook_event_name" in payload and runtime_kind(
         "claude", os.environ.get("CODEX_AGENT_LABEL", "")
-    ) == "codex":
+    ) == "codex"
+    if codex_lifecycle:
+        event = normalize_text(str(payload.get("hook_event_name", "")))
+        already_detached = os.environ.get(CODEX_STOP_BACKGROUND_ENV, "") == "1"
+        if event == "Stop" and not already_detached and detach_codex_stop(argv, payload):
+            return 0
         return handle_codex(payload)
     if "hook_event_name" in payload:
         return handle_claude(payload)
