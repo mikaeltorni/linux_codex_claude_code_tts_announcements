@@ -27,6 +27,11 @@ from . import logging_utils as log
 LOG_COMPONENT = "install"
 LOGGER = log.get_logger("tts_install", log.LOG_FILE_NAME)
 
+#: Foreground hook budget retained for ordered prompt-start and attention work.
+CODEX_HOOK_TIMEOUT_SECONDS = 10
+#: Background Stop budget; long enough for tracker summarization and synthesis.
+CODEX_STOP_HOOK_TIMEOUT_SECONDS = 120
+
 
 #: Matches the current generated Codex notify block (for idempotent replacement).
 CODEX_TTS_BLOCK_RE = re.compile(
@@ -107,7 +112,10 @@ def configure_codex_hooks(
 
     Existing hook events and user-authored handlers are preserved. A previously
     generated attention handler is replaced so repeated installs remain
-    idempotent.
+    idempotent. ``Stop`` runs in Codex's background-hook mode because completion
+    speech is informational and must never delay the completed turn. Prompt
+    submission stays foregrounded so its tracker state is recorded before a
+    very fast turn can finish.
 
     Args:
         hooks_file: User-level Codex ``hooks.json`` path.
@@ -144,17 +152,21 @@ def configure_codex_hooks(
                 updated["hooks"] = handlers
                 kept.append(updated)
 
-        kept.append(
-            {
-                "matcher": "",
-                "hooks": [{"type": "command", "command": command, "timeout": 10}],
-            }
-        )
+        handler: dict[str, Any] = {
+            "type": "command",
+            "command": command,
+            "timeout": CODEX_HOOK_TIMEOUT_SECONDS,
+        }
+        if event == "Stop":
+            handler["async"] = True
+            handler["timeout"] = CODEX_STOP_HOOK_TIMEOUT_SECONDS
+        kept.append({"matcher": "", "hooks": [handler]})
         hooks[event] = kept
     hooks_file.parent.mkdir(parents=True, exist_ok=True)
     hooks_file.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
     log.info(
-        f"merged Codex hooks events={','.join(selected_events)} into {hooks_file}",
+        f"merged Codex hooks events={','.join(selected_events)} "
+        f"background_stop={'Stop' in selected_events} into {hooks_file}",
         component=LOG_COMPONENT,
     )
 

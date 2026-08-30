@@ -190,6 +190,13 @@ def test_installer_writes_config_hooks_without_replacing_binaries(tmp_path):
         assert any("CODEX_AGENT_KIND=codex" in command for command in lifecycle_commands)
         assert any("notify_agent.py" in command for command in lifecycle_commands)
 
+    prompt_handler = installed_codex_hooks["hooks"]["UserPromptSubmit"][-1]["hooks"][0]
+    stop_handler = installed_codex_hooks["hooks"]["Stop"][-1]["hooks"][0]
+    assert "async" not in prompt_handler
+    assert prompt_handler["timeout"] == 10
+    assert stop_handler["async"] is True
+    assert stop_handler["timeout"] == 120
+
     settings = json.loads(claude_settings.read_text(encoding="utf-8"))
     stop_commands = [hook["command"] for entry in settings["hooks"]["Stop"] for hook in entry["hooks"]]
     assert "echo keep" in stop_commands
