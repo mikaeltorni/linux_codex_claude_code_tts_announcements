@@ -863,6 +863,24 @@ def test_detached_codex_child_handles_payload_without_recursing(monkeypatch, eve
     assert handled == [payload]
 
 
+def test_legacy_codex_stop_worker_marker_still_prevents_refork(monkeypatch):
+    """A Stop child launched by pre-upgrade code must survive an in-place install."""
+    handled = []
+    monkeypatch.setenv("CODEX_AGENT_KIND", "codex")
+    monkeypatch.delenv("ATTS_CODEX_HOOK_BACKGROUND", raising=False)
+    monkeypatch.setenv("ATTS_CODEX_STOP_BACKGROUND", "1")
+    monkeypatch.setattr(notify, "handle_codex", lambda payload: handled.append(payload) or 0)
+    monkeypatch.setattr(
+        notify.subprocess,
+        "Popen",
+        lambda *args, **kwargs: pytest.fail("legacy Stop worker attempted to re-fork"),
+    )
+
+    payload = {"hook_event_name": "Stop", "turn_id": "legacy-stop-child"}
+    assert notify.main(["/installed/notify_agent.py"], json.dumps(payload)) == 0
+    assert handled == [payload]
+
+
 def test_codex_prompt_detach_failure_logs_and_falls_back(monkeypatch):
     """A worker launch failure must remain observable without dropping prompt work."""
     handled = []
