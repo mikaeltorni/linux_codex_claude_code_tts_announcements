@@ -774,8 +774,10 @@ def handle_cline(payload: dict[str, Any]) -> int:
 
 #: Grok notification-hook events that mean "the agent finished working".
 GROK_FINISH_EVENTS = {"turn_complete", "task_complete", "agent_error"}
-#: Recursion guard inherited only by the detached Codex Stop worker.
-CODEX_STOP_BACKGROUND_ENV = "ATTS_CODEX_STOP_BACKGROUND"
+#: Recursion guard inherited by detached Codex lifecycle-hook workers.
+CODEX_HOOK_BACKGROUND_ENV = "ATTS_CODEX_HOOK_BACKGROUND"
+#: Compatibility guard used by Stop workers launched by older installed code.
+LEGACY_CODEX_STOP_BACKGROUND_ENV = "ATTS_CODEX_STOP_BACKGROUND"
 
 
 def handle_grok(environ: dict[str, str] | None = None) -> int:
@@ -826,29 +828,44 @@ def handle_grok(environ: dict[str, str] | None = None) -> int:
     return 0
 
 
-def detach_codex_stop(argv: list[str], payload: dict[str, Any]) -> bool:
-    """Launch one isolated worker for a Codex Stop payload.
+def detach_codex_hook(argv: list[str], payload: dict[str, Any], event: str) -> bool:
+    """Launch one isolated worker for a potentially slow Codex hook.
 
     Codex snapshots hook settings when a session starts, so sessions already
-    running during an installer update can retain the old foreground 10-second
-    timeout. The foreground notifier therefore performs a second protection:
-    it passes the decoded payload to a detached copy of itself and returns
-    immediately. Standard streams are disconnected so Codex observes EOF as
-    soon as the parent exits, and a marker prevents the worker from re-forking.
+    running during an installer update can retain a short foreground timeout.
+    Start synthesis and prompt-title summarization can both outlive that budget,
+    so UserPromptSubmit and Stop pass their decoded payload to a detached copy
+    of this entrypoint. The parent returns immediately, standard streams are
+    disconnected, and a marker prevents the worker from re-forking.
+
+    Prompt text is clipped before it becomes a child-process argument. The same
+    text is clipped before every downstream tracker call, so doing it here
+    preserves behavior while avoiding ``E2BIG`` for pasted files or transcripts.
 
     Args:
         argv: Current notifier argument vector; ``argv[0]`` identifies the
             installed entrypoint the worker must execute.
-        payload: Decoded Codex Stop hook payload to process in the worker.
+        payload: Decoded Codex lifecycle payload to process in the worker.
+        event: Normalized lifecycle event name used for diagnostics.
 
     Returns:
         bool: ``True`` when the worker started. ``False`` on launch failure so
         the caller can fall back to foreground handling instead of losing TTS.
     """
     child_env = os.environ.copy()
-    child_env[CODEX_STOP_BACKGROUND_ENV] = "1"
+    child_env[CODEX_HOOK_BACKGROUND_ENV] = "1"
     entrypoint = str(Path(argv[0]).expanduser().resolve())
-    compact_payload = json.dumps(payload, separators=(",", ":"))
+    background_payload = dict(payload)
+    prompt = background_payload.get("prompt")
+    if event == "UserPromptSubmit" and isinstance(prompt, str):
+        clipped_prompt = clip_text(prompt)
+        background_payload["prompt"] = clipped_prompt
+        if clipped_prompt != prompt:
+            log.debug(
+                f"clipped detached Codex prompt from {len(prompt)} to {len(clipped_prompt)} chars",
+                component=LOG_COMPONENT,
+            )
+    compact_payload = json.dumps(background_payload, separators=(",", ":"))
     try:
         child = subprocess.Popen(
             [sys.executable, entrypoint, compact_payload],
@@ -861,12 +878,12 @@ def detach_codex_stop(argv: list[str], payload: dict[str, Any]) -> bool:
         )
     except OSError as exc:
         log.error(
-            f"failed to detach Codex Stop worker: {exc}",
+            f"failed to detach Codex {event} worker: {exc}",
             component=LOG_COMPONENT,
         )
         return False
     log.info(
-        f"detached Codex Stop worker pid={child.pid}",
+        f"detached Codex {event} worker pid={child.pid}",
         component=LOG_COMPONENT,
     )
     return True
@@ -901,8 +918,15 @@ def main(argv: list[str] | None = None, stdin_text: str | None = None) -> int:
     ) == "codex"
     if codex_lifecycle:
         event = normalize_text(str(payload.get("hook_event_name", "")))
-        already_detached = os.environ.get(CODEX_STOP_BACKGROUND_ENV, "") == "1"
-        if event == "Stop" and not already_detached and detach_codex_stop(argv, payload):
+        already_detached = (
+            os.environ.get(CODEX_HOOK_BACKGROUND_ENV, "") == "1"
+            or os.environ.get(LEGACY_CODEX_STOP_BACKGROUND_ENV, "") == "1"
+        )
+        if (
+            event in {"UserPromptSubmit", "Stop"}
+            and not already_detached
+            and detach_codex_hook(argv, payload, event)
+        ):
             return 0
         return handle_codex(payload)
     if "hook_event_name" in payload:

@@ -27,8 +27,8 @@ from . import logging_utils as log
 LOG_COMPONENT = "install"
 LOGGER = log.get_logger("tts_install", log.LOG_FILE_NAME)
 
-#: Foreground hook budget retained for ordered prompt-start and attention work.
-CODEX_HOOK_TIMEOUT_SECONDS = 10
+#: Fallback budget for foreground attention work or a failed worker detach.
+CODEX_HOOK_TIMEOUT_SECONDS = 20
 #: Background Stop budget; long enough for tracker summarization and synthesis.
 CODEX_STOP_HOOK_TIMEOUT_SECONDS = 120
 
@@ -112,10 +112,12 @@ def configure_codex_hooks(
 
     Existing hook events and user-authored handlers are preserved. A previously
     generated attention handler is replaced so repeated installs remain
-    idempotent. ``Stop`` runs in Codex's background-hook mode because completion
+    idempotent. ``Stop`` uses Codex's background-hook mode because completion
     speech is informational and must never delay the completed turn. Prompt
-    submission stays foregrounded so its tracker state is recorded before a
-    very fast turn can finish.
+    submission remains a foreground hook entry, but the notifier immediately
+    hands its work to a detached child; this preserves compatibility with Codex
+    hook ordering while keeping slow synthesis and title summarization outside
+    the runtime's wait path.
 
     Args:
         hooks_file: User-level Codex ``hooks.json`` path.

@@ -1,5 +1,8 @@
 import json
+import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -63,6 +66,7 @@ def test_codex_legacy_notify_completion_is_ignored(monkeypatch):
 def test_main_routes_codex_hook_payload_by_runtime_kind(monkeypatch):
     calls = []
     monkeypatch.setenv("CODEX_AGENT_KIND", "codex")
+    monkeypatch.setenv("ATTS_CODEX_HOOK_BACKGROUND", "1")
     monkeypatch.setenv("ATTS_LIFECYCLE_TRACKED", "1")
     monkeypatch.setenv("CODEX_AGENT_RUN_ID", "codex-123")
     monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
@@ -689,7 +693,7 @@ def test_main_detaches_codex_stop_before_tracker_work(monkeypatch):
         return Child()
 
     monkeypatch.setenv("CODEX_AGENT_KIND", "codex")
-    monkeypatch.delenv("ATTS_CODEX_STOP_BACKGROUND", raising=False)
+    monkeypatch.delenv("ATTS_CODEX_HOOK_BACKGROUND", raising=False)
     monkeypatch.setattr(notify.subprocess, "Popen", launch)
     monkeypatch.setattr(
         notify,
@@ -711,14 +715,142 @@ def test_main_detaches_codex_stop_before_tracker_work(monkeypatch):
     assert kwargs["stderr"] is notify.subprocess.DEVNULL
     assert kwargs["start_new_session"] is True
     assert kwargs["close_fds"] is True
-    assert kwargs["env"]["ATTS_CODEX_STOP_BACKGROUND"] == "1"
+    assert kwargs["env"]["ATTS_CODEX_HOOK_BACKGROUND"] == "1"
 
 
-def test_detached_codex_stop_child_handles_payload_without_recursing(monkeypatch):
-    """The detached child marker must route Stop normally instead of re-forking."""
+def test_main_detaches_codex_prompt_before_slow_title_work(monkeypatch):
+    """Prompt submission must return before title summarization can consume its budget."""
+    launches = []
+
+    class Child:
+        pid = 4322
+
+    def launch(command, **kwargs):
+        launches.append((command, kwargs))
+        return Child()
+
+    monkeypatch.setenv("CODEX_AGENT_KIND", "codex")
+    monkeypatch.delenv("ATTS_CODEX_HOOK_BACKGROUND", raising=False)
+    monkeypatch.setattr(notify.subprocess, "Popen", launch)
+    monkeypatch.setattr(
+        notify,
+        "handle_codex",
+        lambda payload: pytest.fail("foreground process waited for Codex prompt work"),
+    )
+
+    payload = {
+        "hook_event_name": "UserPromptSubmit",
+        "turn_id": "turn-complex",
+        "prompt": "analyze a complex prompt before producing a concise terminal title",
+    }
+    assert notify.main(["/installed/notify_agent.py"], json.dumps(payload)) == 0
+
+    command, kwargs = launches[0]
+    assert command[:2] == [sys.executable, "/installed/notify_agent.py"]
+    assert json.loads(command[2]) == payload
+    assert kwargs["stdin"] is notify.subprocess.DEVNULL
+    assert kwargs["stdout"] is notify.subprocess.DEVNULL
+    assert kwargs["stderr"] is notify.subprocess.DEVNULL
+    assert kwargs["start_new_session"] is True
+    assert kwargs["close_fds"] is True
+    assert kwargs["env"]["ATTS_CODEX_HOOK_BACKGROUND"] == "1"
+
+
+def test_detached_codex_prompt_clips_payload_before_exec(monkeypatch):
+    """Detaching must not reintroduce exec-size failures for pasted prompts."""
+    launches = []
+
+    class Child:
+        pid = 4323
+
+    monkeypatch.setenv("CODEX_AGENT_KIND", "codex")
+    monkeypatch.delenv("ATTS_CODEX_HOOK_BACKGROUND", raising=False)
+    monkeypatch.setattr(
+        notify.subprocess,
+        "Popen",
+        lambda command, **kwargs: launches.append(command) or Child(),
+    )
+
+    payload = {"hook_event_name": "UserPromptSubmit", "prompt": "word " * 100_000}
+    assert notify.main(["/installed/notify_agent.py"], json.dumps(payload)) == 0
+
+    background_payload = json.loads(launches[0][2])
+    assert len(background_payload["prompt"]) <= notify.SPOKEN_TEXT_MAX
+    assert background_payload["prompt"].endswith("…")
+
+
+def test_codex_prompt_entrypoint_returns_before_slow_title(monkeypatch, tmp_path):
+    """A slow title subprocess must not consume the foreground hook budget."""
+    home = tmp_path / "home"
+    tracker = home / ".local/bin/codex-agent-tracker"
+    events = home / "tracker-events.log"
+    tracker.parent.mkdir(parents=True)
+    tracker.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "event = sys.argv[1]\n"
+        "if event == 'title':\n"
+        "    time.sleep(1)\n"
+        "with (Path.home() / 'tracker-events.log').open('a') as handle:\n"
+        "    handle.write(event + '\\n')\n",
+        encoding="utf-8",
+    )
+    tracker.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "HOME": str(home),
+            "ATTS_LIFECYCLE_TRACKED": "1",
+            "ATTS_LOG_DIR": str(tmp_path / "log"),
+            "ATTS_NO_AUDIO": "1",
+            "CODEX_AGENT_KIND": "codex",
+            "CODEX_AGENT_LABEL": "Codex Luna low",
+            "CODEX_AGENT_RUN_ID": "benchmark-luna-low",
+        }
+    )
+    env.pop("ATTS_CODEX_HOOK_BACKGROUND", None)
+    env.pop("ATTS_CODEX_STOP_BACKGROUND", None)
+    payload = json.dumps(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "turn_id": "complex-luna-low",
+            "prompt": "analyze this complex multi-part startup request " * 2_000,
+            "cwd": str(ROOT),
+        }
+    )
+
+    started = time.monotonic()
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/notify_agent.py")],
+        input=payload,
+        text=True,
+        capture_output=True,
+        timeout=0.8,
+        check=False,
+        env=env,
+    )
+    foreground_seconds = time.monotonic() - started
+
+    assert result.returncode == 0, result.stderr
+    assert foreground_seconds < 0.8
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        if events.is_file() and events.read_text(encoding="utf-8").splitlines() == [
+            "turn-start",
+            "title",
+        ]:
+            break
+        time.sleep(0.02)
+    assert events.read_text(encoding="utf-8").splitlines() == ["turn-start", "title"]
+
+
+@pytest.mark.parametrize("event", ["UserPromptSubmit", "Stop"])
+def test_detached_codex_child_handles_payload_without_recursing(monkeypatch, event):
+    """The detached child marker must route lifecycle work without re-forking."""
     handled = []
     monkeypatch.setenv("CODEX_AGENT_KIND", "codex")
-    monkeypatch.setenv("ATTS_CODEX_STOP_BACKGROUND", "1")
+    monkeypatch.setenv("ATTS_CODEX_HOOK_BACKGROUND", "1")
     monkeypatch.setattr(notify, "handle_codex", lambda payload: handled.append(payload) or 0)
     monkeypatch.setattr(
         notify.subprocess,
@@ -726,13 +858,13 @@ def test_detached_codex_stop_child_handles_payload_without_recursing(monkeypatch
         lambda *args, **kwargs: pytest.fail("detached child attempted to re-fork"),
     )
 
-    payload = {"hook_event_name": "Stop", "turn_id": "turn-child"}
+    payload = {"hook_event_name": event, "turn_id": "turn-child"}
     assert notify.main(["/installed/notify_agent.py"], json.dumps(payload)) == 0
     assert handled == [payload]
 
 
-def test_codex_stop_detach_failure_logs_and_falls_back(monkeypatch):
-    """A worker launch failure must remain observable without dropping Stop."""
+def test_codex_prompt_detach_failure_logs_and_falls_back(monkeypatch):
+    """A worker launch failure must remain observable without dropping prompt work."""
     handled = []
     errors = []
 
@@ -740,15 +872,15 @@ def test_codex_stop_detach_failure_logs_and_falls_back(monkeypatch):
         raise OSError("fork unavailable")
 
     monkeypatch.setenv("CODEX_AGENT_KIND", "codex")
-    monkeypatch.delenv("ATTS_CODEX_STOP_BACKGROUND", raising=False)
+    monkeypatch.delenv("ATTS_CODEX_HOOK_BACKGROUND", raising=False)
     monkeypatch.setattr(notify.subprocess, "Popen", fail_to_launch)
     monkeypatch.setattr(notify.log, "error", lambda message, **kwargs: errors.append(message))
     monkeypatch.setattr(notify, "handle_codex", lambda payload: handled.append(payload) or 0)
 
-    payload = {"hook_event_name": "Stop", "turn_id": "turn-fallback"}
+    payload = {"hook_event_name": "UserPromptSubmit", "turn_id": "turn-fallback"}
     assert notify.main(["/installed/notify_agent.py"], json.dumps(payload)) == 0
     assert handled == [payload]
-    assert errors == ["failed to detach Codex Stop worker: fork unavailable"]
+    assert errors == ["failed to detach Codex UserPromptSubmit worker: fork unavailable"]
 
 
 def _context(**overrides):
