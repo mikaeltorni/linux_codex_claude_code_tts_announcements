@@ -205,7 +205,7 @@ that core**, so the program works no matter which subset you pick.
 | `start_voice` | enable start announcements for every runtime |
 | `finish_voice` | enable end announcements for every runtime |
 | `attention_voice` | enable ask-for-further-changes / needs-input announcements |
-| `codex_notify` | Codex `UserPromptSubmit` start and `Stop` finish hooks in primary and numbered account homes (and legacy `notify` migration) |
+| `codex_notify` | Codex `UserPromptSubmit` start and `Stop` finish hooks in primary and numbered account homes (detached from slow synthesis/title work, with legacy `notify` migration) |
 | `codex_attention` | Codex `PermissionRequest` attention hook in primary and numbered account homes |
 | `grok_notify` | Grok `[[ui.notifications.hooks]]` lifecycle block in `~/.grok/config.toml` (start/finish/attention via `$GROK_EVENT`) |
 | `claude_session_start` | Claude Code `SessionStart` hook |

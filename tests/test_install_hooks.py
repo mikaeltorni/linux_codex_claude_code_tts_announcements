@@ -193,7 +193,7 @@ def test_installer_writes_config_hooks_without_replacing_binaries(tmp_path):
     prompt_handler = installed_codex_hooks["hooks"]["UserPromptSubmit"][-1]["hooks"][0]
     stop_handler = installed_codex_hooks["hooks"]["Stop"][-1]["hooks"][0]
     assert "async" not in prompt_handler
-    assert prompt_handler["timeout"] == 10
+    assert prompt_handler["timeout"] == 20
     assert stop_handler["async"] is True
     assert stop_handler["timeout"] == 120
 
