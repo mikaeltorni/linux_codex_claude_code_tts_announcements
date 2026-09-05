@@ -44,6 +44,7 @@ import fcntl
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1363,6 +1364,21 @@ def default_codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
 
 
+def short_model_announcement(text: str) -> str:
+    """Shorten a leading named GPT model in announcement ``text``.
+
+    Accept raw labels and already-humanized names from existing sessions.
+    Match only the model sentence prefix so task text and older GPT names
+    remain intact. Both synthesis backends receive the same shortened text.
+    """
+    return re.sub(
+        r"^GPT[ -]+(?:5(?:\.| point )6[ -]+(Luna|Terra|Sol)|6[ -]+(Astra))(?=\.(?:\s|$)|$)",
+        lambda match: (match.group(1) or match.group(2)).capitalize(),
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
 def speak(
     text: str,
     voice: str,
@@ -1371,7 +1387,7 @@ def speak(
     ignore_silent: bool = False,
     workspace: str | None = None,
 ) -> bool:
-    """Speak literal ``text``, appending the workspace suffix and falling back.
+    """Speak ``text`` with short model names, a workspace suffix, and fallback.
 
     Args:
         text: The literal message to speak.
@@ -1387,7 +1403,7 @@ def speak(
     the same text (unless playback is disabled).
     """
     home = codex_home or default_codex_home()
-    spoken = with_workspace_suffix(text, workspace)
+    spoken = with_workspace_suffix(short_model_announcement(text), workspace)
     if speak_with_kokoro(spoken, voice, home, play=play, ignore_silent=ignore_silent):
         return True
     if play:
