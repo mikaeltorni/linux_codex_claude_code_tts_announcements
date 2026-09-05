@@ -46,6 +46,10 @@ See the full cross-repository map in
 
 ## What it does
 
+Spoken model prefixes use **Luna**, **Terra**, **Sol**, and **Astra** without
+GPT or version numbers, including announcements from already-running sessions.
+Earlier models retain their full names, such as **GPT 5 point 5**.
+
 When installed, this repo:
 
 - installs the `agent-tts` speech engine and links `~/.local/bin/agent-tts`

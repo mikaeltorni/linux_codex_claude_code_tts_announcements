@@ -907,3 +907,27 @@ def test_workspace_x11_probe_retries_after_cooldown_and_resets_on_success(
 
     assert engine.detect_terminal_workspace() == "3"
     assert engine._X11_PROBE_FAILED_AT is None
+
+
+@pytest.mark.parametrize("model, expected", [
+    ("GPT 5 point 6 Luna", "Luna"),
+    ("GPT 5 point 6 Terra", "Terra"),
+    ("GPT 5 point 6 Sol", "Sol"),
+    ("GPT 6 Astra", "Astra"),
+    ("gpt-5.6-luna", "Luna"),
+    ("GPT-6 Astra", "Astra"),
+    ("Luna", "Luna"),
+    ("GPT 5 point 5", "GPT 5 point 5"),
+    ("GPT 6 Mini", "GPT 6 Mini"),
+    ("GPT 6 Astra Mini", "GPT 6 Astra Mini"),
+])
+@pytest.mark.parametrize("kokoro_ok", [True, False])
+def test_speak_shortens_named_gpt_prefix(engine, monkeypatch, model, expected, kokoro_ok):
+    """Both synthesis paths shorten session model prefixes without audio or probes."""
+    captured = []
+    monkeypatch.setattr(engine, "with_workspace_suffix", lambda text, workspace: text)
+    monkeypatch.setattr(engine, "speak_with_kokoro", lambda text, *args, **kwargs: captured.append(text) or kokoro_ok)
+    monkeypatch.setattr(engine, "fallback_speak", lambda text, **kwargs: captured.append(text) or True)
+    body = ". Project demo finished. Discuss GPT 6 Astra next"
+    assert engine.speak(model + body, "af_heart") is True
+    assert captured == [expected + body] * (1 if kokoro_ok else 2)
