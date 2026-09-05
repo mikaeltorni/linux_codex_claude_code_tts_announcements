@@ -1,11 +1,11 @@
 # Clean Installation Compatibility
 
-This repository is part of the `installation_scripts` Linux setup chain. Keep
-the standalone `install.sh` idempotent and compatible with a clean checkout.
-Every runtime dependency, downloaded asset, hook file, and default the feature
-needs must be represented in the installer. The installer must not replace or
-symlink the `codex` or `claude` binaries; it only writes generated,
-marker-delimited hook blocks into their config files.
+The `linux-configuration` skill owns the clean-install and root-optional
+installer rules; they are not restated here. Repository-specific installer
+facts:
+
+The installer must not replace or symlink the `codex` or `claude` binaries; it
+only writes generated, marker-delimited hook blocks into their config files.
 
 # Ownership: this repo owns all agent speech
 
