@@ -46,6 +46,9 @@ See the full cross-repository map in
 
 ## What it does
 
+Notify hooks preserve ACC’s selected `CODEX_AGENT_MODEL_NAME` for start and
+finish announcements, with legacy Local/Qwen model variables as fallbacks.
+
 Spoken model prefixes use **Luna**, **Terra**, **Sol**, and **Astra** without
 GPT or version numbers, including announcements from already-running sessions.
 Earlier models retain their full names, such as **GPT 5 point 5**.
