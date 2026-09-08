@@ -361,9 +361,16 @@ def context_for(payload: dict[str, Any], default_label: str) -> RuntimeContext:
     # Keep config/model-home selection on the engine's shared per-kind path so
     # every Codex-compatible variant gains the same routing as voice selection.
     codex_home = Path(tts_engine.codex_home_for_kind(kind, os.environ))
+    # ACC exports the selected model for every runtime, not only Local/Qwen.
+    # Preserve legacy Local variables for older wrappers and bare Qwen hooks.
     model_name = normalize_text(
-        os.environ.get("CODEX_AGENT_LMSTUDIO_MODEL", "")
+        os.environ.get("CODEX_AGENT_MODEL_NAME", "")
+        or os.environ.get("CODEX_AGENT_LMSTUDIO_MODEL", "")
         or (os.environ.get("QWEN_CODEX_LMSTUDIO_MODEL", "") if kind == "qwen" else "")
+    )
+    log.debug(
+        f"resolved speech context kind={kind} model={model_name or '-'} voice={voice}",
+        component=LOG_COMPONENT,
     )
     return RuntimeContext(
         label=label,

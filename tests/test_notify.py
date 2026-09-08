@@ -952,3 +952,40 @@ def test_run_tracker_logs_arg_bytes_when_launch_fails(monkeypatch):
 
     assert notify.run_tracker(["announce", "--task-description", "x" * 64]) is False
     assert logged and "arg bytes" in logged[0]
+
+
+@pytest.mark.parametrize("event,action", [("UserPromptSubmit", "start"), ("Stop", "finish")])
+@pytest.mark.parametrize("kind,model,spoken", [
+    ("codex", "GPT 6 Astra", "Astra"),
+    ("codex", "gpt-6-astra", "Astra"),
+    ("claude", "Opus 5", "Opus 5"),
+])
+def test_hook_preserves_runtime_model_in_spoken_announcement(monkeypatch, event, action, kind, model, spoken):
+    """Hook-owned speech carries the wrapper model through the shared wording path."""
+    calls = []
+    monkeypatch.setenv("CODEX_AGENT_KIND", kind)
+    monkeypatch.setenv("CODEX_AGENT_LABEL", kind)
+    monkeypatch.setenv("CODEX_AGENT_MODEL_NAME", model)
+    monkeypatch.setenv("CODEX_AGENT_LMSTUDIO_MODEL", "stale-legacy-model")
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+    handler = notify.handle_codex if kind == "codex" else notify.handle_claude
+    hook_event = "SessionStart" if kind == "claude" and action == "start" else event
+    handler({"hook_event_name": hook_event, "cwd": "/repo/demo", "prompt": "fix speech"})
+    announcement = next(args for args in calls if args[0] == "announce")
+    assert announcement[announcement.index("--event") + 1] == action
+    forwarded_model = announcement[announcement.index("--model-name") + 1]
+    assert forwarded_model == model
+    text = notify.tts_engine.agent_announcement_text(kind, "demo", action, model_name=forwarded_model)
+    assert notify.tts_engine.short_model_announcement(text).startswith(spoken + ". ")
+
+
+@pytest.mark.parametrize("env,expected", [
+    ({}, ""),
+    ({"CODEX_AGENT_LMSTUDIO_MODEL": "legacy-model"}, "legacy-model"),
+    ({"CODEX_AGENT_KIND": "qwen", "QWEN_CODEX_LMSTUDIO_MODEL": "local-model"}, "local-model"),
+])
+def test_hook_model_fallbacks(monkeypatch, env, expected):
+    """Bare hooks and legacy Local launches retain their existing model fallback."""
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    assert notify.context_for({}, "codex").model_name == expected
