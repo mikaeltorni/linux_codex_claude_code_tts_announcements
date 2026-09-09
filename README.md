@@ -278,3 +278,8 @@ is unmuted). Check the Agent TTS stream and selected output in your audio mixer
 if speech is still inaudible; a successful player exit confirms submission to
 the audio server, not audible output from the speakers. Reinstall the `engine`
 component after updating playback code: `bash install.sh --select engine`.
+
+Child `SubagentStop` hooks are intentionally silent: they inherit their parent's
+tracker token but do not mean the parent task is done. This also applies to
+Grok goal planners using Claude-compatible hooks. The parent's `Stop` still
+triggers its normal completion announcement.
