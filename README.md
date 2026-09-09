@@ -283,3 +283,8 @@ Child `SubagentStop` hooks are intentionally silent: they inherit their parent's
 tracker token but do not mean the parent task is done. This also applies to
 Grok goal planners using Claude-compatible hooks. The parent's `Stop` still
 triggers its normal completion announcement.
+
+Typed Claude/Grok `Notification` events request spoken attention only for
+`permission_prompt`. Background `task_complete`, idle, and informational events
+stay silent. Both `notification_type` and Grok's `notificationType` are supported;
+legacy untyped messages retain their existing handling.
