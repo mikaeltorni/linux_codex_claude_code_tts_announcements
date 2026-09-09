@@ -268,3 +268,13 @@ You are solely responsible for determining whether this software is suitable, sa
 The authors and copyright holders make no guarantees regarding security, reliability, availability, correctness, compliance, non-infringement, or fitness for any particular purpose.
 
 This notice is intended to clarify the nature of the project and does not impose additional restrictions beyond the MIT License.
+
+### Speech plays silently despite successful playback logs
+
+PipeWire and PulseAudio playback use the **Agent TTS** application identity and
+Notification role. This gives speech its own saved stream volume instead of
+inheriting `pw-play`'s Music volume (which can be zero while the output device
+is unmuted). Check the Agent TTS stream and selected output in your audio mixer
+if speech is still inaudible; a successful player exit confirms submission to
+the audio server, not audible output from the speakers. Reinstall the `engine`
+component after updating playback code: `bash install.sh --select engine`.

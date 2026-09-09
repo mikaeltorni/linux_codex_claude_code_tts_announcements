@@ -402,7 +402,8 @@ def test_no_audio_false_value_does_not_suppress_playback(engine, monkeypatch, tm
     monkeypatch.setattr(engine.subprocess, "run", fake_run)
 
     assert engine.play_audio(audio) is True
-    assert calls == [["/usr/bin/pw-play", str(audio)]]
+    assert calls == [["/usr/bin/pw-play", "--media-role", "Notification", "--properties",
+         'application.name="Agent TTS" application.id=org.agent-tts', str(audio)]]
 
 
 def test_play_audio_serializes_concurrent_players(engine, monkeypatch, tmp_path):
@@ -480,7 +481,8 @@ def test_play_audio_coalesces_concurrent_identical_clips(engine, monkeypatch, tm
         thread.join(timeout=2)
 
     assert all(not thread.is_alive() for thread in threads)
-    assert calls == [["/usr/bin/pw-play", str(audio)]]
+    assert calls == [["/usr/bin/pw-play", "--media-role", "Notification", "--properties",
+         'application.name="Agent TTS" application.id=org.agent-tts', str(audio)]]
     contents = (engine.LOG_DIR / "voice.log").read_text(encoding="utf-8")
     assert "suppressed duplicate clip" in contents
 
@@ -561,8 +563,10 @@ def test_play_audio_allows_same_clip_after_duplicate_window(engine, monkeypatch,
     assert engine.play_audio(audio) is True
 
     assert calls == [
-        ["/usr/bin/pw-play", str(audio)],
-        ["/usr/bin/pw-play", str(audio)],
+        ["/usr/bin/pw-play", "--media-role", "Notification", "--properties",
+         'application.name="Agent TTS" application.id=org.agent-tts', str(audio)],
+        ["/usr/bin/pw-play", "--media-role", "Notification", "--properties",
+         'application.name="Agent TTS" application.id=org.agent-tts', str(audio)],
     ]
 
 
@@ -931,3 +935,20 @@ def test_speak_shortens_named_gpt_prefix(engine, monkeypatch, model, expected, k
     body = ". Project demo finished. Discuss GPT 6 Astra next"
     assert engine.speak(model + body, "af_heart") is True
     assert captured == [expected + body] * (1 if kokoro_ok else 2)
+
+
+def test_pulse_playback_has_dedicated_notification_identity(engine, monkeypatch, tmp_path):
+    """Fallback playback must not inherit generic player or music volume state."""
+    audio = tmp_path / "speech.wav"
+    audio.write_bytes(b"wav")
+    monkeypatch.setenv("ATTS_NO_AUDIO", "0")
+    monkeypatch.setattr(engine.shutil, "which", lambda name: "/usr/bin/paplay" if name == "paplay" else None)
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        return engine.subprocess.CompletedProcess(command, 0)
+    monkeypatch.setattr(engine.subprocess, "run", run)
+    assert engine.play_audio(audio)
+    assert calls == [["/usr/bin/paplay", "--client-name=Agent TTS",
+                      "--property=application.id=org.agent-tts",
+                      "--property=media.role=notification", str(audio)]]
