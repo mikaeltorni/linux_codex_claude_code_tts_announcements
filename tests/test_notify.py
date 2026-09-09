@@ -1006,3 +1006,25 @@ def test_grok_planner_stop_does_not_complete_parent(monkeypatch, tracked):
     assert notify.handle_claude({**payload, "hook_event_name": "Stop"}) == 0
     assert len(calls) == 1
     assert calls[0][0] == ("turn-complete" if tracked else "announce")
+
+
+@pytest.mark.parametrize("field", ["notificationType", "notification_type"])
+@pytest.mark.parametrize("kind", ["task_complete", "idle_prompt", "auth_success", "informational"])
+def test_informational_notifications_never_request_input(monkeypatch, field, kind):
+    """Background completion and idle notices do not indicate a blocked agent."""
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+    assert notify.handle_claude({"hook_event_name": "Notification", field: kind,
+                                 "message": "Background task finished", "cwd": "/repo"}) == 0
+    assert calls == []
+
+
+@pytest.mark.parametrize("field", ["notificationType", "notification_type"])
+def test_typed_permission_notification_requests_input(monkeypatch, field):
+    """Both native payload formats preserve real permission alerts."""
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+    notify.handle_claude({"hook_event_name": "Notification", field: "permission_prompt",
+                           "message": "Approval required", "cwd": "/repo"})
+    assert len(calls) == 1
+    assert calls[0][0] == "clarify"

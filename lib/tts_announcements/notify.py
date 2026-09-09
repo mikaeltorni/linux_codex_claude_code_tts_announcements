@@ -693,6 +693,18 @@ def handle_claude(payload: dict[str, Any]) -> int:
             )
         update_title(str(payload.get("prompt", "")), context, feature_key=feature_key)
     elif event in {"Notification", "PermissionRequest"}:
+        # Grok emits camelCase while Claude uses snake_case. Background-task
+        # completion and idle pings share Notification with permission prompts;
+        # only the latter establishes that the user actually needs to act.
+        notification_type = normalize_text(str(
+            payload.get("notification_type") or payload.get("notificationType") or ""
+        )).casefold()
+        if event == "Notification" and notification_type and notification_type != "permission_prompt":
+            log.debug(
+                f"skip non-input notification type={notification_type}",
+                component=LOG_COMPONENT,
+            )
+            return 0
         raw_message = normalize_text(str(payload.get("message", "")))
         # Claude fires a Notification both for genuine attention (permission
         # requests) and for the idle "waiting for your input" timeout that recurs
