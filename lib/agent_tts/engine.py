@@ -913,9 +913,22 @@ def play_audio(audio_path: Path, ignore_silent: bool = False) -> bool:
             player_path = shutil.which(player)
             if not player_path:
                 continue
+            # A stable application id keeps WirePlumber's restored stream volume
+            # separate from generic players. pw-play defaults to Music, which
+            # can be saved at zero even when the output device is unmuted.
+            command = [player_path]
+            if player == "pw-play":
+                command += ["--media-role", "Notification", "--properties",
+                            'application.name="Agent TTS" application.id=org.agent-tts']
+            elif player == "paplay":
+                command += ["--client-name=Agent TTS",
+                            "--property=application.id=org.agent-tts",
+                            "--property=media.role=notification"]
+            command.append(str(audio_path))
+            LOGGER.info("playback starting player=%s application=org.agent-tts role=notification", player)
             try:
                 result = subprocess.run(
-                    [player_path, str(audio_path)],
+                    command,
                     check=False,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
