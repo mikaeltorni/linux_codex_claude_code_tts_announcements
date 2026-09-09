@@ -646,13 +646,20 @@ def handle_claude(payload: dict[str, Any]) -> int:
         component=LOG_COMPONENT,
     )
 
-    if lifecycle_is_tracker_managed() and event in {"SessionStart", "Stop", "SubagentStop"}:
+    # Child agents inherit the parent's tracker token and feature key. Their
+    # completion (including Grok's goal planner via Claude-compatible hooks)
+    # must never finish the parent turn or consume its announcement dedupe.
+    if event == "SubagentStop":
+        log.debug("skip child completion; parent turn remains active", component=LOG_COMPONENT)
+        return 0
+
+    if lifecycle_is_tracker_managed() and event in {"SessionStart", "Stop"}:
         # The ACC launcher bracket only covers process start/exit; the per-turn
         # Stop of an interactive session is invisible to the tracker (its
         # session watch reads Codex-family JSONL, never Claude transcripts).
         # Forward Stop as a turn completion so the tracker speaks the finish;
         # only fall back to speaking directly when no run token exists.
-        if event in {"Stop", "SubagentStop"} and not notify_turn_complete(
+        if event == "Stop" and not notify_turn_complete(
             turn_id=str(payload.get("turn_id", ""))
         ):
             task = transcript_prompt(str(payload.get("transcript_path", "")))
@@ -674,7 +681,7 @@ def handle_claude(payload: dict[str, Any]) -> int:
             announce("start", context, feature_key=feature_key)
         else:
             log.debug(f"skip start announce for source={source}", component=LOG_COMPONENT)
-    elif event in {"Stop", "SubagentStop"}:
+    elif event == "Stop":
         task = transcript_prompt(str(payload.get("transcript_path", "")))
         announce("finish", context, task_description=task, feature_key=feature_key)
     elif event == "UserPromptSubmit":

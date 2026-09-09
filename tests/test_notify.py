@@ -989,3 +989,20 @@ def test_hook_model_fallbacks(monkeypatch, env, expected):
     for name, value in env.items():
         monkeypatch.setenv(name, value)
     assert notify.context_for({}, "codex").model_name == expected
+
+
+@pytest.mark.parametrize("tracked", [False, True])
+def test_grok_planner_stop_does_not_complete_parent(monkeypatch, tracked):
+    """Grok's inherited Claude hook must ignore a goal planner finishing."""
+    monkeypatch.setenv("ATTS_LIFECYCLE_TRACKED", "1" if tracked else "0")
+    monkeypatch.setenv("CODEX_AGENT_RUN_ID", "grok-parent")
+    monkeypatch.setenv("CODEX_AGENT_KIND", "grok")
+    calls = []
+    monkeypatch.setattr(notify, "run_tracker", lambda args: calls.append(args) or True)
+    payload = {"hook_event_name": "SubagentStop", "cwd": "/repo",
+               "session_id": "parent", "agent_id": "goal-planner"}
+    assert notify.handle_claude(payload) == 0
+    assert calls == []
+    assert notify.handle_claude({**payload, "hook_event_name": "Stop"}) == 0
+    assert len(calls) == 1
+    assert calls[0][0] == ("turn-complete" if tracked else "announce")
