@@ -56,7 +56,11 @@ _ATTS_ENV = (
 
 @pytest.fixture
 def engine(tmp_path, monkeypatch):
-    """Reload the engine with a private state dir and no real audio."""
+    """Reload the engine with private state dirs and no real audio.
+
+    The legacy ACC directory is redirected too, so saved user settings cannot
+    leak into the test through the migration fallback.
+    """
     for name in _ATTS_ENV:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ATTS_STATE_DIR", str(tmp_path / "state"))
@@ -65,6 +69,7 @@ def engine(tmp_path, monkeypatch):
     monkeypatch.setenv("ATTS_NO_AUDIO", "1")
     import agent_tts.engine as e
     importlib.reload(e)
+    e.LEGACY_STATE_DIR = tmp_path / "legacy-state"
     return e
 
 
