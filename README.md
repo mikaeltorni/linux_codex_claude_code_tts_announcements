@@ -77,6 +77,9 @@ It does not replace or symlink the `codex` or `claude` binaries.
 
 ```bash
 agent-tts voice --text "hello" --voice af_sky   # speak a literal line
+agent-tts announce --event start --project-name "Demo project" --voice af_sky
+agent-tts announce --event finish --project-name "Demo project" --voice af_sky
+agent-tts clarify --project-name "Demo project" --voice af_sky
 agent-tts speed 1.5                              # read/set the speed multiplier
 agent-tts volume 1000                            # read/set the volume percentage
 agent-tts silent toggle                          # mute/unmute all announcements
@@ -142,9 +145,17 @@ and the OS page cache before the first agent turn speaks, so the first
 announcement no longer pays the cold ~6 s startup on the critical path.
 Warming is best-effort (`Nice=10`, no audio, always exits 0) and never stalls
 the session. Run `agent-tts prewarm` by hand to warm the current shell.
-- `ATTS_ANNOUNCE_WORKSPACE=0` — disable the spoken workspace suffix. On
-  desktops where every `xprop` workspace probe fails (e.g. GNOME on
-  Wayland without usable EWMH properties), probing automatically backs off
+- `ATTS_ANNOUNCE_WORKSPACE=0` — disable the spoken workspace suffix. On X11,
+  tmux announcements resolve the terminal attached to the announcing pane's
+  session, using the client's window identity rather than the pane's inherited
+  `WINDOWID`. Workspace numbers are one-based and placement is read for each
+  announcement, so moving a terminal changes its subsequent announcements.
+  Detached sessions, missing terminal windows, sticky windows, and attached
+  terminals on different workspaces say "on an unknown workspace"; they do not
+  borrow the focused window's workspace. Direct callers outside tmux use their
+  own `WINDOWID`; desktop focus is a fallback only without a terminal identity.
+  Without a terminal identity, if every `xprop` workspace probe fails (e.g.
+  GNOME on Wayland without usable EWMH properties), probing backs off
   for 5 minutes after a fully-failed attempt instead of re-running failing
   probes — and logging their failures — on every announcement.
 - `ATTS_ANNOUNCE_START`, `ATTS_ANNOUNCE_FINISH`, and
