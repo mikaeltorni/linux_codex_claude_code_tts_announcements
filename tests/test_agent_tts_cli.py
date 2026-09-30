@@ -99,6 +99,33 @@ def test_voice_speaks_composed_text(cli, monkeypatch):
     assert spoken == {"text": "hello there", "voice": "af_sky"}
 
 
+@pytest.mark.parametrize("command, expected", [
+    (["announce", "--event", "start"], "Project demo project started on workspace 1"),
+    (["announce", "--event", "finish", "--completion-message", "Demo project done"],
+     "Demo project done on workspace 1"),
+    (["clarify"], "Project demo project needs your input. What should we do next? on workspace 1"),
+])
+def test_lifecycle_cli_uses_attached_tmux_terminal_workspace(cli, monkeypatch, command, expected):
+    """Public announcement verbs resolve workspace 1 despite stale workspace-2 env."""
+    monkeypatch.setenv("TMUX", "/tmp/test-tmux/default,10,0")
+    monkeypatch.setenv("TMUX_PANE", "%7")
+    monkeypatch.setenv("WINDOWID", "100")
+    monkeypatch.setenv("ATTS_ANNOUNCE_WORKSPACE", "1")
+    responses = {
+        ("tmux", "display-message", "-p", "-t", "%7", "#{session_id}"): "$3",
+        ("tmux", "list-clients", "-t", "$3", "-F", "#{client_pid}"): "123",
+        ("xprop", "-id", "200", "_NET_WM_DESKTOP"): "_NET_WM_DESKTOP(CARDINAL) = 0",
+        ("xprop", "-id", "100", "_NET_WM_DESKTOP"): "_NET_WM_DESKTOP(CARDINAL) = 1",
+    }
+    monkeypatch.setattr(cli.engine, "_capture_command", lambda cmd, timeout=1.0: responses.get(tuple(cmd), ""))
+    monkeypatch.setattr(Path, "read_bytes", lambda path: b"WINDOWID=200\0")
+    spoken = []
+    monkeypatch.setattr(cli.engine, "speak_with_kokoro", lambda text, *args, **kwargs: spoken.append(text) or True)
+
+    assert cli.main([*command, "--voice", "af_test", "--project-name", "demo project"]) == 0
+    assert spoken == [expected]
+
+
 def test_speech_verbs_report_engine_failure(cli, monkeypatch):
     """Direct callers must receive a nonzero status when no speech path works."""
     monkeypatch.setattr(cli.engine, "speak", lambda *args, **kwargs: False)

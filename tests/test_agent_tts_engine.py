@@ -876,6 +876,126 @@ def test_fallback_speak_timeout_uses_short_budget_and_cancels_spd_queue(
     assert "cancelled queued speech-dispatcher messages" in contents
 
 
+@pytest.mark.parametrize("inherited_desktop", ["1", None])
+def test_tmux_workspace_uses_attached_terminal_not_inherited_or_focused_window(
+    engine, monkeypatch, inherited_desktop
+):
+    """Workspace 1 wins over a stale/missing WINDOWID and focus on workspace 2."""
+    monkeypatch.setenv("TMUX", "/tmp/test-tmux/default,10,0")
+    monkeypatch.setenv("TMUX_PANE", "%7")
+    monkeypatch.setenv("WINDOWID", "100")
+    monkeypatch.setenv("ATTS_ANNOUNCE_WORKSPACE", "1")
+    calls = []
+
+    def capture(cmd, timeout=1.0):
+        calls.append(cmd)
+        responses = {
+            ("tmux", "display-message", "-p", "-t", "%7", "#{session_id}"): "$3",
+            ("tmux", "list-clients", "-t", "$3", "-F", "#{client_pid}"): "123",
+            ("xprop", "-id", "200", "_NET_WM_DESKTOP"): "_NET_WM_DESKTOP(CARDINAL) = 0",
+            ("xprop", "-root", "_NET_ACTIVE_WINDOW"): "_NET_ACTIVE_WINDOW(WINDOW) = 0x64",
+            ("xprop", "-root", "_NET_CURRENT_DESKTOP"): "_NET_CURRENT_DESKTOP(CARDINAL) = 1",
+        }
+        if inherited_desktop is not None:
+            responses[("xprop", "-id", "100", "_NET_WM_DESKTOP")] = (
+                f"_NET_WM_DESKTOP(CARDINAL) = {inherited_desktop}"
+            )
+        return responses.get(tuple(cmd), "")
+
+    monkeypatch.setattr(engine, "_capture_command", capture)
+    monkeypatch.setattr(Path, "read_bytes", lambda path: b"WINDOWID=200\0IGNORED=private\0")
+
+    assert engine.with_workspace_suffix("Project demo started") == "Project demo started on workspace 1"
+    assert ["xprop", "-id", "100", "_NET_WM_DESKTOP"] not in calls
+    assert not any("-root" in cmd for cmd in calls)
+
+
+@pytest.mark.parametrize("client_ids", ["", "123", "123\n456"])
+def test_tmux_workspace_unresolved_or_ambiguous_never_uses_focus(engine, monkeypatch, client_ids):
+    """Detached, vanished and differently placed clients cannot identify one workspace."""
+    monkeypatch.setenv("TMUX", "/tmp/test-tmux/default,10,0")
+    monkeypatch.setenv("TMUX_PANE", "%7")
+    monkeypatch.setenv("WINDOWID", "100")
+    calls = []
+
+    def capture(cmd, timeout=1.0):
+        calls.append(cmd)
+        if cmd[0] == "tmux":
+            return "$3" if cmd[1] == "display-message" else client_ids
+        if "200" in cmd and "456" in client_ids:
+            return "_NET_WM_DESKTOP(CARDINAL) = 0"
+        if "300" in cmd:
+            return "_NET_WM_DESKTOP(CARDINAL) = 1"
+        return "_NET_CURRENT_DESKTOP(CARDINAL) = 1"
+
+    def read_bytes(path):
+        return b"WINDOWID=200\0" if "123" in str(path) else b"WINDOWID=300\0"
+
+    monkeypatch.setattr(engine, "_capture_command", capture)
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    if client_ids == "123":
+        monkeypatch.setattr(Path, "read_bytes", lambda path: b"NO_WINDOW=1\0")
+
+    assert engine.detect_terminal_workspace() == ""
+    assert not any("-root" in cmd for cmd in calls)
+
+
+def test_tmux_workspace_follows_terminal_moves(engine, monkeypatch):
+    """Start and finish probes re-read placement instead of caching the launch workspace."""
+    monkeypatch.setenv("TMUX", "/tmp/test-tmux/default,10,0")
+    monkeypatch.setenv("TMUX_PANE", "%7")
+    desktop = [0]
+    monkeypatch.setattr(Path, "read_bytes", lambda path: b"WINDOWID=200\0")
+    monkeypatch.setattr(engine, "_capture_command", lambda cmd, timeout=1.0: (
+        "$3" if cmd[1] == "display-message" else "123" if cmd[0] == "tmux"
+        else f"_NET_WM_DESKTOP(CARDINAL) = {desktop[0]}"
+    ))
+    assert engine.detect_terminal_workspace() == "1"
+    desktop[0] = 3
+    assert engine.detect_terminal_workspace() == "4"
+
+
+@pytest.mark.parametrize("property_value", ["", "4294967295"])
+def test_known_x11_window_without_workspace_never_uses_focus(engine, monkeypatch, property_value):
+    """Invalid or sticky terminal windows must not announce the user's active workspace."""
+    monkeypatch.setenv("WINDOWID", "200")
+    monkeypatch.setattr(engine, "_capture_command", lambda cmd, timeout=1.0: (
+        f"_NET_WM_DESKTOP(CARDINAL) = {property_value}" if "200" in cmd
+        else "_NET_CURRENT_DESKTOP(CARDINAL) = 1"
+    ))
+    assert engine.detect_terminal_workspace() == ""
+
+
+def test_tmux_workspace_missing_pane_and_unreadable_client_are_unknown(engine, monkeypatch):
+    """Missing identity and exited client processes never borrow another terminal."""
+    monkeypatch.setenv("TMUX", "/tmp/test-tmux/default,10,0")
+    monkeypatch.setenv("WINDOWID", "100")
+    monkeypatch.setattr(engine, "_capture_command", lambda cmd, timeout=1.0: (
+        "$3" if cmd[1] == "display-message" else "123"
+    ))
+    assert engine.detect_terminal_workspace() == ""
+    monkeypatch.setenv("TMUX_PANE", "%7")
+
+    def gone_client(path):
+        raise FileNotFoundError("client exited")
+
+    monkeypatch.setattr(Path, "read_bytes", gone_client)
+    assert engine.detect_terminal_workspace() == ""
+
+
+def test_known_window_overrides_tmux_and_anonymous_probe_cooldown(engine, monkeypatch):
+    """An explicit terminal identity is authoritative even after root probes failed."""
+    monkeypatch.setenv("TMUX", "/tmp/test-tmux/default,10,0")
+    monkeypatch.setenv("TMUX_PANE", "%7")
+    engine._X11_PROBE_FAILED_AT = engine.time.monotonic()
+    calls = []
+    monkeypatch.setattr(engine, "_capture_command", lambda cmd, timeout=1.0: (
+        calls.append(cmd) or "_NET_WM_DESKTOP(CARDINAL) = 0"
+    ))
+    assert engine.detect_terminal_workspace("200") == "1"
+    assert calls == [["xprop", "-id", "200", "_NET_WM_DESKTOP"]]
+
+
 def test_workspace_x11_probe_backs_off_after_total_failure(engine, monkeypatch):
     """A failing xprop environment is probed once, then skipped for the cooldown.
 

@@ -471,7 +471,8 @@ def _xprop_desktop_index(args: list[str]) -> int | None:
         index = int(value)
     except ValueError:
         return None
-    return index if index >= 0 else None
+    # EWMH's all-desktops sentinel belongs to sticky windows, not workspace N.
+    return index if 0 <= index < 0xFFFFFFFF else None
 
 
 #: Monotonic timestamp of the last fully-failed X11 workspace probe, or
@@ -494,12 +495,21 @@ def _x11_workspace(window_id: str) -> str:
 
     Args:
         window_id: Explicit X11 window id; falls back to ``$WINDOWID``.
+            A known window that cannot be resolved never falls back to focus.
 
     Returns:
         str: 1-based workspace number, or "" when undetectable (in which case
         further probing is suppressed for :data:`X11_PROBE_RETRY_SECONDS`).
     """
     global _X11_PROBE_FAILED_AT
+    wid = (window_id or os.environ.get("WINDOWID", "")).strip()
+    if wid:
+        index = _xprop_desktop_index(["-id", wid, "_NET_WM_DESKTOP"])
+        if index is not None:
+            _X11_PROBE_FAILED_AT = None
+            return str(index + 1)
+        LOGGER.info("terminal workspace unresolved window=%s; ignoring desktop focus", wid)
+        return ""
     now = time.monotonic()
     if (
         _X11_PROBE_FAILED_AT is not None
@@ -507,12 +517,6 @@ def _x11_workspace(window_id: str) -> str:
     ):
         return ""
 
-    wid = (window_id or os.environ.get("WINDOWID", "")).strip()
-    if wid:
-        index = _xprop_desktop_index(["-id", wid, "_NET_WM_DESKTOP"])
-        if index is not None:
-            _X11_PROBE_FAILED_AT = None
-            return str(index + 1)
     active = _capture_command(["xprop", "-root", "_NET_ACTIVE_WINDOW"])
     if "=" in active:
         active_id = active.rsplit("=", 1)[1].strip().split(",")[0].strip()
@@ -534,17 +538,66 @@ def _x11_workspace(window_id: str) -> str:
     return ""
 
 
+@logging_utils.log_call(LOGGER)
+def _tmux_workspace(pane: str) -> str:
+    """Read the live X11 workspace of the clients attached to ``pane``'s session.
+
+    tmux panes inherit server/session environment, so their ``WINDOWID`` may
+    belong to a closed terminal or another session. Each attached client's
+    procfs environment identifies its actual outer terminal. Return unknown
+    when no terminal resolves or attached terminals span multiple workspaces.
+    Only the window identifier is read from procfs; environment values are
+    never logged. The pane is explicit so tmux cannot select its latest session.
+    """
+    if not re.fullmatch(r"%\d+", pane):
+        LOGGER.info("tmux workspace unresolved: missing or invalid pane identity")
+        return ""
+    session = _capture_command(["tmux", "display-message", "-p", "-t", pane, "#{session_id}"])
+    if not re.fullmatch(r"\$\d+", session):
+        LOGGER.info("tmux workspace unresolved pane=%s: session unavailable", pane)
+        return ""
+    clients = _capture_command(["tmux", "list-clients", "-t", session, "-F", "#{client_pid}"])
+    workspaces: set[str] = set()
+    for pid in clients.splitlines():
+        if not pid.isdigit():
+            continue
+        try:
+            entries = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+        except OSError as exc:
+            LOGGER.debug("tmux client window unavailable pid=%s: %s", pid, exc)
+            continue
+        wid = next((item.split(b"=", 1)[1].decode("ascii", "replace")
+                    for item in entries if item.startswith(b"WINDOWID=")), "").strip()
+        if not re.fullmatch(r"(?:0x[0-9a-fA-F]+|[0-9]+)", wid):
+            continue
+        index = _xprop_desktop_index(["-id", wid, "_NET_WM_DESKTOP"])
+        if index is not None:
+            workspaces.add(str(index + 1))
+    if len(workspaces) == 1:
+        workspace = workspaces.pop()
+        LOGGER.debug("tmux terminal workspace resolved pane=%s session=%s workspace=%s", pane, session, workspace)
+        return workspace
+    LOGGER.info("tmux workspace unresolved pane=%s session=%s distinct_workspaces=%s; ignoring desktop focus",
+                pane, session, len(workspaces))
+    return ""
+
+
 def detect_terminal_workspace(window_id: str = "") -> str:
     """Best-effort detection of the workspace hosting the CLI's terminal.
 
     Works across compositors: GNOME/X11 and other EWMH window managers (via
     ``xprop``), sway (via ``swaymsg``), and Hyprland (via ``hyprctl``). On X11
-    the CLI's own terminal window (``$WINDOWID``) is preferred, with the active
-    window and the visible workspace as fallbacks. Returns "" when undetectable.
+    an explicit window or the attached tmux terminal takes precedence over
+    ``$WINDOWID``. Active-window/current-desktop fallback is used only without
+    a terminal identity; a vanished or detached terminal returns unknown.
     A fully-failed ``xprop`` environment is only re-probed every
     :data:`X11_PROBE_RETRY_SECONDS` to keep unusable desktops from flooding the
     log with per-announcement probe failures.
     """
+    if window_id:
+        return _x11_workspace(window_id)
+    if os.environ.get("TMUX"):
+        return _tmux_workspace(os.environ.get("TMUX_PANE", "").strip())
     sway = _capture_command(["swaymsg", "-t", "get_workspaces"])
     if sway:
         try:
