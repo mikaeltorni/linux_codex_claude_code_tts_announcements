@@ -30,11 +30,47 @@ tts_install_root() {
   printf '%s\n' "${TTS_INSTALL_ROOT:-$(tts_target_home)/.local/share/codex-claude-tts-announcements}"
 }
 
+# Resolve the notify program written into hook config.
+# Cargo installs the notify-agent ELF. A PATH that hides cargo keeps the
+# Python script so clean-home tests still configure hooks.
+tts_notify_program() {
+  local elf
+  elf="$(tts_install_root)/scripts/notify-agent"
+  if [ "${TTS_RUST_BUILT:-}" = 1 ] && [ -x "$elf" ]; then
+    printf '%s\n' "$elf"
+    return
+  fi
+  if command -v cargo >/dev/null 2>&1 && [ -x "$elf" ]; then
+    printf '%s\n' "$elf"
+    return
+  fi
+  printf '%s\n' "$(tts_install_root)/scripts/notify_agent.py"
+}
+
 # Build the command string written into Codex and Claude hook config.
 tts_hook_command() {
-  local script
-  script="$(tts_install_root)/scripts/notify_agent.py"
-  printf 'python3 %q' "$script"
+  local program
+  program="$(tts_notify_program)"
+  case "$program" in
+    *.py) printf 'python3 %q' "$program" ;;
+    *) printf '%q' "$program" ;;
+  esac
+}
+
+# Run the hook-config writer. The release binary is used after a successful
+# cargo build; otherwise the Python module remains the writer.
+tts_run_hooks() {
+  local bin="$SCRIPT_DIR/target/release/tts-hooks"
+  if [ "${TTS_RUST_BUILT:-}" = 1 ] && [ -x "$bin" ]; then
+    "$bin" "$@"
+    return
+  fi
+  if command -v cargo >/dev/null 2>&1 && tts_build_agent_tts && [ -x "$bin" ]; then
+    TTS_RUST_BUILT=1
+    "$bin" "$@"
+    return
+  fi
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks "$@"
 }
 
 # Resolve the user bin directory where the agent-tts launcher symlink is placed.
@@ -193,6 +229,7 @@ install_agent_tts_engine() {
   install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/__init__.py" "$root/lib/tts_announcements/__init__.py"
   install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/logging_utils.py" "$root/lib/tts_announcements/logging_utils.py"
   if tts_build_agent_tts; then
+    TTS_RUST_BUILT=1
     install -m 0755 "$SCRIPT_DIR/target/release/agent-tts" "$root/scripts/agent-tts"
   else
     install -m 0755 "$SCRIPT_DIR/scripts/agent-tts" "$root/scripts/agent-tts"
@@ -220,6 +257,11 @@ install_tts_hook_files() {
   install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/install_hooks.py" "$root/lib/tts_announcements/install_hooks.py"
   install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/notify.py" "$root/lib/tts_announcements/notify.py"
   install -m 0755 "$SCRIPT_DIR/scripts/notify_agent.py" "$root/scripts/notify_agent.py"
+  if [ "${TTS_RUST_BUILT:-}" = 1 ] || { command -v cargo >/dev/null 2>&1 && tts_build_agent_tts; }; then
+    TTS_RUST_BUILT=1
+    install -m 0755 "$SCRIPT_DIR/target/release/notify-agent" "$root/scripts/notify-agent"
+    install -m 0755 "$SCRIPT_DIR/target/release/tts-hooks" "$root/scripts/tts-hooks"
+  fi
 }
 
 # Ensure the runtime core a notify hook depends on is present.
@@ -241,9 +283,9 @@ _tts_configure_codex_lifecycle_home() {
   hooks_file="$codex_home/hooks.json"
   lifecycle_command="env CODEX_AGENT_KIND=codex CODEX_AGENT_LABEL=codex $command"
   mkdir -p "$codex_home"
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+  tts_run_hooks \
     remove-codex "$config_file"
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+  tts_run_hooks \
     codex-hooks "$hooks_file" "$lifecycle_command" UserPromptSubmit Stop
   tts_msg "Configured Codex UserPromptSubmit/Stop hooks in $hooks_file"
 }
@@ -252,16 +294,16 @@ _tts_configure_codex_lifecycle_home() {
 configure_codex_notify_block() {
   local home command codex_home config_file hooks_file lifecycle_command
   home="$(tts_target_home)"
-  command="$(tts_hook_command)"
   ensure_tts_core
+  command="$(tts_hook_command)"
   if [ -n "${CODEX_CONFIG_FILE:-}${CODEX_HOOKS_FILE:-}" ]; then
     config_file="${CODEX_CONFIG_FILE:-$home/.codex/config.toml}"
     hooks_file="${CODEX_HOOKS_FILE:-$home/.codex/hooks.json}"
     lifecycle_command="env CODEX_AGENT_KIND=codex CODEX_AGENT_LABEL=codex $command"
     mkdir -p "$(dirname "$config_file")" "$(dirname "$hooks_file")"
-    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+    tts_run_hooks \
       remove-codex "$config_file"
-    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+    tts_run_hooks \
       codex-hooks "$hooks_file" "$lifecycle_command" UserPromptSubmit Stop
     tts_msg "Configured Codex UserPromptSubmit/Stop hooks in $hooks_file"
     return
@@ -278,7 +320,7 @@ _tts_configure_codex_attention_home() {
   hooks_file="$codex_home/hooks.json"
   attention_command="env CODEX_AGENT_KIND=codex CODEX_AGENT_LABEL=codex $command"
   mkdir -p "$codex_home"
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+  tts_run_hooks \
     codex-hooks "$hooks_file" "$attention_command" PermissionRequest
   tts_msg "Configured Codex attention hook in $hooks_file"
 }
@@ -287,13 +329,13 @@ _tts_configure_codex_attention_home() {
 configure_codex_attention_hook() {
   local home hooks_file command attention_command codex_home
   home="$(tts_target_home)"
-  command="$(tts_hook_command)"
   ensure_tts_core
+  command="$(tts_hook_command)"
   if [ -n "${CODEX_HOOKS_FILE:-}" ]; then
     hooks_file="$CODEX_HOOKS_FILE"
     attention_command="env CODEX_AGENT_KIND=codex CODEX_AGENT_LABEL=codex $command"
     mkdir -p "$(dirname "$hooks_file")"
-    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+    tts_run_hooks \
       codex-hooks "$hooks_file" "$attention_command" PermissionRequest
     tts_msg "Configured Codex attention hook in $hooks_file"
     return
@@ -312,10 +354,10 @@ configure_claude_event_hook() {
   local event="$1" home settings_file command
   home="$(tts_target_home)"
   settings_file="${CLAUDE_SETTINGS_FILE:-$home/.claude/settings.json}"
-  command="$(tts_hook_command)"
   ensure_tts_core
+  command="$(tts_hook_command)"
   mkdir -p "$(dirname "$settings_file")"
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks claude "$settings_file" "$command" "$event"
+  tts_run_hooks claude "$settings_file" "$command" "$event"
   tts_msg "Configured Claude Code $event hook in $settings_file"
 }
 
@@ -333,12 +375,12 @@ configure_cline_event_hook() {
   home="$(tts_target_home)"
   hooks_dir="${CLINE_HOOKS_DIR:-$home/.cline/hooks}"
   hook_file="$hooks_dir/$event"
-  command="$(tts_hook_command)"
   ensure_tts_core
+  command="$(tts_hook_command)"
   mkdir -p "$hooks_dir"
   local py_args=(cline "$hook_file" "$command")
   [ -n "$filter_tool" ] && py_args+=(--filter-tool "$filter_tool")
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+  tts_run_hooks \
     "${py_args[@]}"
   tts_msg "Configured Cline $event hook in $hook_file"
 }
@@ -351,10 +393,10 @@ configure_grok_notify_hook() {
   local home config_file command
   home="$(tts_target_home)"
   config_file="${GROK_CONFIG_FILE:-$home/.grok/config.toml}"
-  command="env CODEX_AGENT_KIND=grok CODEX_AGENT_LABEL=grok $(tts_hook_command)"
   ensure_tts_core
+  command="env CODEX_AGENT_KIND=grok CODEX_AGENT_LABEL=grok $(tts_hook_command)"
   mkdir -p "$(dirname "$config_file")"
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks grok "$config_file" "$command"
+  tts_run_hooks grok "$config_file" "$command"
   tts_msg "Configured Grok notification hooks in $config_file"
 }
 
@@ -449,7 +491,7 @@ detect_codex_notify() {
 # path instead of relying on either serialized escaping or a comment marker.
 detect_grok_notify() {
   local f="${GROK_CONFIG_FILE:-$(tts_target_home)/.grok/config.toml}"
-  local managed; managed="$(tts_install_root)/scripts/notify_agent.py"
+  local managed; managed="$(tts_notify_program)"
   [ -f "$f" ] || return 1
   python3 - "$f" "$managed" <<'PY'
 import shlex, sys, tomllib
@@ -477,7 +519,7 @@ PY
 # JSON escaping and false positives from a retired install path.
 _tts_json_has_event() {
   local f="$1" event="$2" managed
-  managed="$(tts_install_root)/scripts/notify_agent.py"
+  managed="$(tts_notify_program)"
   [ -f "$f" ] || return 1
   python3 - "$f" "$event" "$managed" <<'PY'
 import json, shlex, sys
@@ -585,17 +627,17 @@ uninstall_codex_notify() {
     config_file="${CODEX_CONFIG_FILE:-$home/.codex/config.toml}"
     hooks_file="${CODEX_HOOKS_FILE:-$home/.codex/hooks.json}"
     tts_msg "Removing Codex lifecycle hooks from $hooks_file"
-    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks remove-codex "$config_file"
-    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+    tts_run_hooks remove-codex "$config_file"
+    tts_run_hooks \
       remove-codex-hooks "$hooks_file" UserPromptSubmit Stop
     return
   fi
   for codex_home in "$home/.codex" "$home"/.codex-account-*; do
     [ -d "$codex_home" ] || continue
     tts_msg "Removing Codex lifecycle hooks from $codex_home/hooks.json"
-    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+    tts_run_hooks \
       remove-codex "$codex_home/config.toml"
-    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+    tts_run_hooks \
       remove-codex-hooks "$codex_home/hooks.json" UserPromptSubmit Stop
   done
 }
@@ -605,26 +647,26 @@ uninstall_codex_attention() {
   if [ -n "${CODEX_HOOKS_FILE:-}" ]; then
     hooks_file="$CODEX_HOOKS_FILE"
     tts_msg "Removing Codex attention hook from $hooks_file"
-    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+    tts_run_hooks \
       remove-codex-hooks "$hooks_file" PermissionRequest
     return
   fi
   for codex_home in "$home/.codex" "$home"/.codex-account-*; do
     [ -d "$codex_home" ] || continue
     tts_msg "Removing Codex attention hook from $codex_home/hooks.json"
-    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+    tts_run_hooks \
       remove-codex-hooks "$codex_home/hooks.json" PermissionRequest
   done
 }
 uninstall_grok_notify() {
   local f="${GROK_CONFIG_FILE:-$(tts_target_home)/.grok/config.toml}"
   tts_msg "Removing Grok notification hooks from $f"
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks remove-grok "$f"
+  tts_run_hooks remove-grok "$f"
 }
 _tts_remove_claude_event() {
   local event="$1" f="${CLAUDE_SETTINGS_FILE:-$(tts_target_home)/.claude/settings.json}"
   tts_msg "Removing Claude $event notify hook from $f"
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks \
+  tts_run_hooks \
     remove-claude "$f" "$(tts_hook_command)" "$event"
 }
 uninstall_claude_session_start() { _tts_remove_claude_event SessionStart; }
@@ -639,7 +681,7 @@ _tts_remove_cline_event() {
   hooks_dir="${CLINE_HOOKS_DIR:-$home/.cline/hooks}"
   file="$hooks_dir/$event"
   tts_msg "Removing Cline $event notify hook from $file"
-  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.install_hooks remove-cline "$file"
+  tts_run_hooks remove-cline "$file"
 }
 uninstall_cline_task_start()    { _tts_remove_cline_event TaskStart; }
 uninstall_cline_task_resume()   { _tts_remove_cline_event TaskResume; }
