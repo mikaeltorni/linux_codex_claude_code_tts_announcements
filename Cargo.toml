@@ -7,3 +7,14 @@ description = "Agent TTS command"
 [[bin]]
 name = "agent-tts"
 path = "src/main.rs"
+
+[[bin]]
+name = "tts-hooks"
+path = "src/bin/tts-hooks.rs"
+
+[[bin]]
+name = "notify-agent"
+path = "src/bin/notify-agent.rs"
+
+[dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
