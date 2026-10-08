@@ -5,9 +5,11 @@
 The agent text-to-speech home for the supported coding agents on Linux. This
 repository ships two things:
 
-1. **`agent-tts`** — the standalone speech engine that owns *all* agent TTS:
-   Kokoro synthesis, ffmpeg volume amplification, playback, voice selection, the
-   speed/volume/silent tunables, and the spoken start/finish/clarify wording.
+1. **`agent-tts`** — the speech command. Its commands are `voice`, `say`,
+   `announce`, `clarify`, `prewarm`, `speed`, `volume`, and `silent`. When
+   `cargo` is on `PATH`, the installer builds the Rust binary. Kokoro synthesis,
+   ffmpeg gain, and playback stay in `lib/agent_tts/engine.py`, and the binary
+   calls that engine. Without `cargo`, the installer keeps the Python launcher.
 2. **Notify hooks** — Codex, Claude Code, Cline, and Grok hooks that turn agent lifecycle
    events into spoken start/finish/attention/danger announcements.
 
