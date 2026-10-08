@@ -1,0 +1,9 @@
+[package]
+name = "agent-tts"
+version = "0.1.0"
+edition = "2021"
+description = "Agent TTS command"
+
+[[bin]]
+name = "agent-tts"
+path = "src/main.rs"

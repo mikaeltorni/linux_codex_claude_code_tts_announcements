@@ -162,6 +162,20 @@ tts_set_event_setting() {
   tts_msg "Set $key=$value in $file"
 }
 
+# Build the Rust agent-tts command when cargo is already available.
+# A missing toolchain keeps the Python launcher so a PATH-limited test install
+# still speaks through the engine. run_as_target is not used: it would hide
+# rustup by pointing HOME at the target home.
+tts_build_agent_tts() {
+  command -v cargo >/dev/null 2>&1 || return 1
+  local cargo_bin cargo_home rustup_home
+  cargo_bin="$(command -v cargo)"
+  cargo_home="$(cd "$(dirname "$cargo_bin")/.." && pwd)"
+  rustup_home="$(dirname "$cargo_home")/.rustup"
+  env CARGO_HOME="${CARGO_HOME:-$cargo_home}" RUSTUP_HOME="${RUSTUP_HOME:-$rustup_home}" \
+    cargo build --manifest-path "$SCRIPT_DIR/Cargo.toml" --locked --release
+}
+
 # Install the standalone Agent TTS (ATTS) speech engine and its `agent-tts`
 # launcher. The engine owns all speech (synthesis, playback, speed/volume/silent
 # tunables, voice selection, wording); runtimes such as agent_command_center
@@ -178,7 +192,11 @@ install_agent_tts_engine() {
   # no notify hooks were selected.
   install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/__init__.py" "$root/lib/tts_announcements/__init__.py"
   install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/logging_utils.py" "$root/lib/tts_announcements/logging_utils.py"
-  install -m 0755 "$SCRIPT_DIR/scripts/agent-tts" "$root/scripts/agent-tts"
+  if tts_build_agent_tts; then
+    install -m 0755 "$SCRIPT_DIR/target/release/agent-tts" "$root/scripts/agent-tts"
+  else
+    install -m 0755 "$SCRIPT_DIR/scripts/agent-tts" "$root/scripts/agent-tts"
+  fi
   # The entrypoint resolves its bundled package relative to its real path, so a
   # symlink in PATH keeps finding `$root/lib`.
   ln -sf "$root/scripts/agent-tts" "$bin/agent-tts"
