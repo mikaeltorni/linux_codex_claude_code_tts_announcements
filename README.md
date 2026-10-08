@@ -55,9 +55,20 @@ Spoken model prefixes use **Luna**, **Terra**, **Sol**, and **Astra** without
 GPT or version numbers, including announcements from already-running sessions.
 Earlier models retain their full names, such as **GPT 5 point 5**.
 
+Hook routing and hook-config writes are the `notify-agent` and `tts-hooks`
+binaries. `notify-agent` reads a hook payload from stdin or one positional
+JSON argument and always exits 0. Its commands are the payload itself and
+`--grok` (which reads `GROK_EVENT` and `GROK_MESSAGE`). It asks
+`codex-agent-tracker` to `announce`, `clarify`, `title`, `turn-start`, or
+`turn-complete`. `tts-hooks` writes the config those hooks point at. Its
+commands are `codex-hooks`, `claude`, `cline`, `grok`, `remove-codex`,
+`remove-codex-hooks`, `remove-grok`, `remove-claude`, and `remove-cline`.
+Kokoro synthesis, ffmpeg gain, and playback stay in `lib/agent_tts/engine.py`.
+
 When installed, this repo:
 
 - installs the `agent-tts` speech engine and links `~/.local/bin/agent-tts`
+- installs `notify-agent` and `tts-hooks` next to that engine when cargo is available
 - installs a hash-locked ONNX Runtime CUDA target when an NVIDIA GPU and `uv`
   are available; CPU synthesis remains the fallback
 - copies hook code to `$HOME/.local/share/codex-claude-tts-announcements/`
