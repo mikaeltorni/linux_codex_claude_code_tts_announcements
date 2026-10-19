@@ -12,11 +12,8 @@ import tty
 
 from . import install_hooks
 
-DEFAULT_VOICES = {
-    'codex': 'af_bella', 'claude': 'af_sky', 'qwen': 'af_heart',
-    'cline': 'af_aoede', 'grok': 'af_kore', 'openrouter': 'af_jessica',
-    'nvidia': 'af_sarah', 'opencode': 'af_heart',
-}
+from agent_tts.voices import DEFAULT_VOICES, read_preferences
+
 HARNESS_HOMES = {
     'codex': ('.codex', ('codex',)), 'claude': ('.claude', ('claude',)),
     'qwen': ('.codex-qwen', ('qwen',)), 'cline': ('.cline', ('cline',)),
@@ -44,38 +41,6 @@ def discover_harnesses(home):
             found[kind] = homes
     print(found, file=sys.stderr)
     return found
-
-
-def read_preferences(home):
-    """Read saved choices without accepting malformed configuration.
-
-    Parameters: home - target user's home directory.
-    Returns: saved harness-to-voice mapping, or an empty mapping when absent.
-    """
-    print(f'home={home}', file=sys.stderr)
-    path = home / '.config/agent-tts/voices.json'
-    try:
-        result = json.loads(path.read_text())
-    except FileNotFoundError:
-        result = {}
-    require_preferences(result)
-    print(result, file=sys.stderr)
-    return result
-
-
-def require_preferences(preferences):
-    """Reject malformed saved voice data before changing user files.
-
-    Parameters: preferences - decoded persistent configuration.
-    Returns: None.
-    """
-    print(f'preferences={preferences}', file=sys.stderr)
-    if not isinstance(preferences, dict) or any(
-        not isinstance(key, str) or not isinstance(value, str) or not value.strip()
-        for key, value in preferences.items()
-    ):
-        raise ValueError('voices.json must contain a mapping of harness names to voice names')
-    print(None, file=sys.stderr)
 
 
 def choose_voice(kind, current, voices):
@@ -122,7 +87,7 @@ def configure_harness(kind, homes, voice, command):
     Returns: None.
     """
     print(f'kind={kind}, homes={homes}, voice={voice}, command={command}', file=sys.stderr)
-    hook = f'env CODEX_AGENT_KIND={kind} CODEX_AGENT_LABEL={kind} ATTS_{kind.upper()}_VOICE={shlex.quote(voice)} {command}'
+    hook = f'env CODEX_AGENT_KIND={kind} CODEX_AGENT_LABEL={kind} ATTS_{kind.upper()}_VOICE={shlex.quote(voice)} CODEX__TTS_VOICE={shlex.quote(voice)} {command}'
     for home in homes:
         if kind in ('codex', 'qwen', 'openrouter', 'nvidia'):
             install_hooks.remove_codex_notify(home / 'config.toml')
@@ -141,18 +106,24 @@ def configure_harness(kind, homes, voice, command):
     print(None, file=sys.stderr)
 
 
-def configure_installation(home, command, voices):
-    """Collect choices before saving them and configuring discovered harnesses.
+def configure_installation(home, command, voices, interactive=True, require_enabled=False):
+    """Reuse or collect choices before configuring discovered harnesses.
 
-    Parameters: home - target home; command - installed notifier command; voices - offered voice ids.
+    Parameters: home - target home; command - installed notifier command; voices - offered voice ids; interactive - prompt for changes; require_enabled - skip when hook integration is disabled.
     Returns: None.
     """
-    print(f'home={home}, command={command}, voices={voices}', file=sys.stderr)
+    print(f'home={home}, command={command}, voices={voices}, interactive={interactive}, require_enabled={require_enabled}', file=sys.stderr)
+    enabled = home / '.config/agent-tts/harness-hooks.enabled'
+    if require_enabled and not enabled.is_file():
+        print(None, file=sys.stderr)
+        return
     harnesses = discover_harnesses(home)
     preferences = read_preferences(home)
     selected = dict(preferences)
     for kind in harnesses:
-        voice = choose_voice(kind, preferences.get(kind, DEFAULT_VOICES[kind]), voices)
+        voice = preferences.get(kind, DEFAULT_VOICES[kind])
+        if interactive:
+            voice = choose_voice(kind, voice, voices)
         if voice is None:
             print('Selection cancelled; harness hooks and voice choices unchanged.')
             print(None, file=sys.stderr)
@@ -161,9 +132,11 @@ def configure_installation(home, command, voices):
     if harnesses:
         path = home / '.config/agent-tts/voices.json'
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix('.tmp')
-        temporary.write_text(json.dumps(selected, indent=2) + '\n')
-        temporary.replace(path)
+        if interactive:
+            temporary = path.with_suffix(f'.tmp.{os.getpid()}')
+            temporary.write_text(json.dumps(selected, indent=2) + '\n')
+            temporary.replace(path)
+        enabled.touch()
         if os.environ.get('TTS_MANUAL_EVENTS_NEW') == '1':
             event_file = Path(os.environ.get('ATTS_EVENT_CONFIG_FILE') or home / '.config/agent-tts/announcements.env')
             event_file.parent.mkdir(parents=True, exist_ok=True)
@@ -171,6 +144,9 @@ def configure_installation(home, command, voices):
         for kind, homes in harnesses.items():
             configure_harness(kind, homes, selected[kind], command)
     else:
+        if not interactive:
+            enabled.parent.mkdir(parents=True, exist_ok=True)
+            enabled.touch()
         print('No supported harnesses found; voice choices unchanged.')
     print(None, file=sys.stderr)
 
@@ -179,27 +155,29 @@ def parse_arguments(argv):
     """Parse installer syntax once before dispatching operations.
 
     Parameters: argv - raw command-line arguments.
-    Returns: parsed target home, notifier command and voice catalog.
+    Returns: parsed target home, notifier command, catalog and operation flags.
     """
     print(f'argv={argv}', file=sys.stderr)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--home', type=Path, required=True)
     parser.add_argument('--command', required=True)
-    parser.add_argument('--voices', nargs='+', required=True)
+    parser.add_argument('--voices', nargs='+', default=list(DEFAULT_VOICES.values()))
+    parser.add_argument('--sync', action='store_true')
+    parser.add_argument('--require-enabled', action='store_true')
     result = parser.parse_args(argv)
     print(result, file=sys.stderr)
     return result
 
 
 def main(argv=None):
-    """Dispatch the interactive installation operation.
+    """Dispatch interactive selection or noninteractive reconciliation.
 
     Parameters: argv - optional raw argument vector.
     Returns: zero after success or user cancellation.
     """
     print(f'argv={argv}', file=sys.stderr)
     args = parse_arguments(argv)
-    configure_installation(args.home, args.command, args.voices)
+    configure_installation(args.home, args.command, args.voices, not args.sync, args.require_enabled)
     print(0, file=sys.stderr)
     return 0
 

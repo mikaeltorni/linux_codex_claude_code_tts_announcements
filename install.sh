@@ -97,6 +97,15 @@ source "$SCRIPT_DIR/installer/components.sh"
 # Returns: zero after successful installation or cancellation.
 main() {
   printf 'parameters=%s\n' "$*" >&2
+  if [ "${1:-}" = --sync-harnesses ]; then
+    if [ "$#" -ne 1 ]; then printf 'Usage: bash install.sh --sync-harnesses\n' >&2; return 2; fi
+    if [ ! -f "$(tts_event_config_file)" ]; then export TTS_MANUAL_EVENTS_NEW=1; fi
+    ensure_tts_core
+    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.installation \
+      --home "$(tts_target_home)" --command "$(tts_hook_command)" --sync
+    printf '0\n' >&2
+    return 0
+  fi
   if [ "$#" -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
     if [ ! -f "$(tts_event_config_file)" ]; then export TTS_MANUAL_EVENTS_NEW=1; fi
     ensure_tts_core

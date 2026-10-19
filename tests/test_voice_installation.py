@@ -159,3 +159,69 @@ def test_accepting_defaults_keeps_all_current_runtime_voices(tmp_path):
     run_manual(home, [b'\n'] * len(expected))
     assert json.loads((home / '.config/agent-tts/voices.json').read_text()) == expected
     print(None)
+
+
+def test_sync_installs_new_accounts_without_changing_choices(tmp_path):
+    """Reconcile a later account noninteractively with saved choices and settings.
+
+    Parameters: tmp_path - isolated target home.
+    Returns: None.
+    """
+    print(f'tmp_path={tmp_path}')
+    home = tmp_path / 'home'
+    (home / '.codex').mkdir(parents=True)
+    run_manual(home, [b'\x1b[B\n'])
+    preferences = (home / '.config/agent-tts/voices.json').read_text()
+    events = home / '.config/agent-tts/announcements.env'
+    events.write_text('ATTS_ANNOUNCE_START=0\nATTS_ANNOUNCE_FINISH=1\n')
+    account = home / '.codex-account-3'
+    account.mkdir()
+    env = {'HOME': str(home), 'TTS_TARGET_HOME': str(home), 'PATH': str(home / 'bin'),
+           'ISC_FUNCTIONS_DIR': str(FRAMEWORK), 'TTS_SKIP_SYSTEMD': '1',
+           'ATTS_INSTALL_GPU_RUNTIME': '0', 'TTS_LOG_DIR': str(home / 'logs')}
+    result = subprocess.run(['bash', str(ROOT / 'install.sh'), '--sync-harnesses'],
+                            env=env, text=True, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert 'Enter to confirm' not in result.stdout
+    hooks = (account / 'hooks.json').read_text()
+    assert 'ATTS_CODEX_VOICE=af_sky' in hooks
+    assert (home / '.config/agent-tts/voices.json').read_text() == preferences
+    assert events.read_text() == 'ATTS_ANNOUNCE_START=0\nATTS_ANNOUNCE_FINISH=1\n'
+    (account / 'hooks.json').unlink()
+    result = subprocess.run([str(home / '.local/bin/tts-reconcile')], env=env,
+                            text=True, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert (account / 'hooks.json').read_text() == hooks
+    (home / '.config/agent-tts/harness-hooks.enabled').unlink()
+    (account / 'hooks.json').unlink()
+    result = subprocess.run([str(home / '.local/bin/tts-reconcile')], env=env,
+                            text=True, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert not (account / 'hooks.json').exists()
+    print(None)
+
+
+def test_sync_rejects_invalid_preferences_without_replacing_user_hooks(tmp_path):
+    """Reject damaged voice data and unknown arguments while preserving hooks.
+
+    Parameters: tmp_path - isolated target home.
+    Returns: None.
+    """
+    print(f'tmp_path={tmp_path}')
+    home = tmp_path / 'home'
+    (home / '.codex').mkdir(parents=True)
+    run_manual(home, [b'\n'])
+    hooks = home / '.codex/hooks.json'
+    before = hooks.read_text()
+    preferences = home / '.config/agent-tts/voices.json'
+    preferences.write_text('["bad"]')
+    env = {'HOME': str(home), 'TTS_TARGET_HOME': str(home), 'PATH': str(home / 'bin'),
+           'ISC_FUNCTIONS_DIR': str(FRAMEWORK), 'TTS_SKIP_SYSTEMD': '1',
+           'ATTS_INSTALL_GPU_RUNTIME': '0', 'TTS_LOG_DIR': str(home / 'logs')}
+    for arguments in (['--sync-harnesses'], ['--sync-harnesses', '--bad']):
+        result = subprocess.run(['bash', str(ROOT / 'install.sh'), *arguments],
+                                env=env, text=True, capture_output=True, timeout=20)
+        assert result.returncode != 0, arguments
+        assert hooks.read_text() == before, arguments
+        assert preferences.read_text() == '["bad"]', arguments
+    print(None)

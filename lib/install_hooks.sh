@@ -217,6 +217,10 @@ tts_build_agent_tts() {
 # tunables, voice selection, wording); runtimes such as agent_command_center
 # delegate to the installed `agent-tts` binary.
 install_agent_tts_engine() {
+  # Install the speech engine and shared persistent voice reader.
+  # Parameters: none.
+  # Returns: zero after installing the engine.
+  printf 'parameters=none\n' >&2
   local root bin
   root="$(tts_install_root)"
   bin="$(tts_bin_dir)"
@@ -224,6 +228,7 @@ install_agent_tts_engine() {
   install -m 0644 "$SCRIPT_DIR/lib/agent_tts/__init__.py" "$root/lib/agent_tts/__init__.py"
   install -m 0644 "$SCRIPT_DIR/lib/agent_tts/engine.py" "$root/lib/agent_tts/engine.py"
   install -m 0644 "$SCRIPT_DIR/lib/agent_tts/cli.py" "$root/lib/agent_tts/cli.py"
+  install -m 0644 "$SCRIPT_DIR/lib/agent_tts/voices.py" "$root/lib/agent_tts/voices.py"
   # agent_tts imports the repository's one centralized logging module even when
   # no notify hooks were selected.
   install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/__init__.py" "$root/lib/tts_announcements/__init__.py"
@@ -240,6 +245,7 @@ install_agent_tts_engine() {
   install_agent_tts_gpu_runtime
   initialize_tts_event_settings
   tts_msg "Installed agent-tts engine to $root and linked $bin/agent-tts"
+  printf '0\n' >&2
 }
 
 # Enable independently selectable spoken event categories.
@@ -249,6 +255,10 @@ install_attention_voice() { install_agent_tts_engine; tts_set_event_setting ATTS
 
 # Install the notify hook package and script without mutating any agent config.
 install_tts_hook_files() {
+  # Install reusable notification programs and the lifecycle reconciler.
+  # Parameters: none.
+  # Returns: zero after installing the hook runtime.
+  printf 'parameters=none\n' >&2
   local root
   root="$(tts_install_root)"
   mkdir -p "$root/lib/tts_announcements" "$root/scripts"
@@ -256,12 +266,17 @@ install_tts_hook_files() {
   install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/logging_utils.py" "$root/lib/tts_announcements/logging_utils.py"
   install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/install_hooks.py" "$root/lib/tts_announcements/install_hooks.py"
   install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/notify.py" "$root/lib/tts_announcements/notify.py"
+  install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/installation.py" "$root/lib/tts_announcements/installation.py"
+  install -m 0755 "$SCRIPT_DIR/scripts/tts-reconcile" "$root/scripts/tts-reconcile"
+  mkdir -p "$(tts_bin_dir)"
+  ln -sf "$root/scripts/tts-reconcile" "$(tts_bin_dir)/tts-reconcile"
   install -m 0755 "$SCRIPT_DIR/scripts/notify_agent.py" "$root/scripts/notify_agent.py"
   if [ "${TTS_RUST_BUILT:-}" = 1 ] || { command -v cargo >/dev/null 2>&1 && tts_build_agent_tts; }; then
     TTS_RUST_BUILT=1
     install -m 0755 "$SCRIPT_DIR/target/release/notify-agent" "$root/scripts/notify-agent"
     install -m 0755 "$SCRIPT_DIR/target/release/tts-hooks" "$root/scripts/tts-hooks"
   fi
+  printf '0\n' >&2
 }
 
 # Ensure the runtime core a notify hook depends on is present.
