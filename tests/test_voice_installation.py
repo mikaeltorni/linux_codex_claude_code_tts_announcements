@@ -4,6 +4,7 @@ import json
 import os
 import pty
 import select
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -12,13 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 FRAMEWORK = Path(os.environ.get('ISC_FUNCTIONS_DIR', Path.home() / 'projects/linux_installation_scripts_functions'))
 
 
-def run_manual(home, keys):
+def run_manual(home, keys, checkout=ROOT):
     """Run the public installer on a terminal and answer each voice prompt.
 
-    Parameters: home - isolated target home; keys - bytes to send per prompt.
+    Parameters: home - isolated target home; keys - bytes to send per prompt; checkout - installer checkout.
     Returns: terminal output after successful installation.
     """
-    print(f"home={home}, keys={keys}")
+    print(f"home={home}, keys={keys}, checkout={checkout}")
     binary_dir = home / 'bin'
     binary_dir.mkdir(exist_ok=True)
     for name in ('bash', 'python3', 'dirname', 'mkdir', 'install', 'ln', 'date', 'sed',
@@ -30,7 +31,7 @@ def run_manual(home, keys):
             target.symlink_to('/usr/bin/' + name)
     master, slave = pty.openpty()
     process = subprocess.Popen(
-        ['bash', str(ROOT / 'install.sh')], stdin=slave, stdout=slave, stderr=slave,
+        ['bash', str(checkout / 'install.sh')], stdin=slave, stdout=slave, stderr=slave,
         env={'HOME': str(home), 'TTS_TARGET_HOME': str(home), 'PATH': str(binary_dir),
              'ISC_FUNCTIONS_DIR': str(FRAMEWORK), 'TTS_SKIP_SYSTEMD': '1',
              'ATTS_INSTALL_GPU_RUNTIME': '0', 'TTS_LOG_DIR': str(home / 'logs')},
@@ -114,4 +115,47 @@ def test_manual_cancel_preserves_preferences_and_hooks(tmp_path):
     run_manual(home, [b'q'])
     assert not (home / '.config/agent-tts/voices.json').exists()
     assert not (home / '.codex/hooks.json').exists()
+    print(None)
+
+
+def test_editable_install_catalog_preserves_saved_voice(tmp_path):
+    """Changing the install.sh list offers new choices and retains saved voices.
+
+    Parameters: tmp_path - isolated checkout and target home.
+    Returns: None.
+    """
+    print(f"tmp_path={tmp_path}")
+    checkout = tmp_path / 'checkout'
+    shutil.copytree(ROOT, checkout, ignore=shutil.ignore_patterns('.git', 'target', 'tmp', '.log', '__pycache__', '.pytest_cache'))
+    installer = checkout / 'install.sh'
+    source = installer.read_text()
+    assert 'TTS_VOICES=(' in source
+    source = source.replace('TTS_VOICES=(', 'TTS_VOICES=(am_onyx ')
+    installer.write_text(source)
+    home = tmp_path / 'home'
+    (home / '.codex').mkdir(parents=True)
+    output = run_manual(home, [b'\x1b[A\n'], checkout)
+    assert 'am_onyx' in output
+    assert json.loads((home / '.config/agent-tts/voices.json').read_text())['codex'] == 'am_onyx'
+    run_manual(home, [b'\n'], checkout)
+    assert json.loads((home / '.config/agent-tts/voices.json').read_text())['codex'] == 'am_onyx'
+    print(None)
+
+
+def test_accepting_defaults_keeps_all_current_runtime_voices(tmp_path):
+    """Accept each current voice without silently changing the built-in defaults.
+
+    Parameters: tmp_path - isolated target home.
+    Returns: None.
+    """
+    print(f"tmp_path={tmp_path}")
+    home = tmp_path / 'home'
+    expected = {'codex': 'af_bella', 'claude': 'af_sky', 'qwen': 'af_heart',
+                'cline': 'af_aoede', 'grok': 'af_kore', 'openrouter': 'af_jessica',
+                'nvidia': 'af_sarah', 'opencode': 'af_heart'}
+    for relative in ('.codex', '.claude', '.codex-qwen', '.cline', '.grok',
+                     '.codex-openrouter', '.codex-nvidia', '.config/opencode'):
+        (home / relative).mkdir(parents=True)
+    run_manual(home, [b'\n'] * len(expected))
+    assert json.loads((home / '.config/agent-tts/voices.json').read_text()) == expected
     print(None)

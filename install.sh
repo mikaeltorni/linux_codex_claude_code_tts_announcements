@@ -10,6 +10,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_LIB="$SCRIPT_DIR/lib/install_hooks.sh"
 
+# Edit this list to change the voices offered by the manual arrow-key picker.
+# Keep runtime defaults separate: reordering this catalog never changes them.
+TTS_VOICES=(af_bella af_sky af_heart af_aoede af_kore af_jessica af_sarah)
+
 # shellcheck source=lib/install_hooks.sh
 source "$INSTALL_LIB"
 
@@ -97,7 +101,7 @@ main() {
     if [ ! -f "$(tts_event_config_file)" ]; then export TTS_MANUAL_EVENTS_NEW=1; fi
     ensure_tts_core
     PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.installation \
-      --home "$(tts_target_home)" --command "$(tts_hook_command)"
+      --home "$(tts_target_home)" --command "$(tts_hook_command)" --voices "${TTS_VOICES[@]}"
     printf '0\n' >&2
     return 0
   fi
