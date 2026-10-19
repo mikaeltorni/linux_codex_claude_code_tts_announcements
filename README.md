@@ -37,7 +37,7 @@ This repository has two layers with different dependencies:
   those sources with `ISC_FUNCTIONS_GIT_URL` or `ISC_FUNCTIONS_RAW`.
 
 Agent Command Center delegates all speech to this repository's `agent-tts`
-engine and installs it through its recommended (default-on) `tts_announcements`
+engine and installs it through its optional, opt-in `tts_announcements`
 component: the master setup chain clones this repository first and Agent Command
 Center then configures the engine, voice categories, and hooks as part of its
 own install. Installing this repository on its own works too — its `install.sh`
@@ -209,12 +209,40 @@ and terminal titles, and unbounded text previously aborted the launch with
 ## Installation
 
 ```bash
-bash install.sh              # interactive component menu (or default-on set)
-bash install.sh --default    # install all default-on components, no prompts
+bash install.sh              # terminal: detect harnesses and choose each voice with arrows
+bash install.sh --sync-harnesses  # detected harnesses, saved voices, no prompts
+bash install.sh --disable-harnesses # remove managed hooks; retain voice choices
+tts-reconcile                # refresh enabled hooks without building/downloading
+bash install.sh --default    # legacy component defaults, no prompts
 bash install.sh --all        # install every component
 bash install.sh --list-components
 bash install.sh --select engine,claude_stop   # install exactly these
 ```
+
+On a terminal, `bash install.sh` detects supported command names on `PATH`
+and existing configuration homes: Codex (including `.codex-account-N`), Claude
+Code, Qwen/Local, Cline, Grok, OpenRouter, NVIDIA and OpenCode. Use the up/down
+arrows to choose a voice and Enter to confirm each harness family; `q` or Ctrl+C
+cancels before changing voice choices or harness hooks. OpenCode speech is
+tracker-driven; this installer does not add unsupported native OpenCode hooks.
+Without a terminal, the no-argument invocation retains the installation-config
+component flow; use `--sync-harnesses` for unattended harness discovery.
+
+Edit the `TTS_VOICES=(...)` Bash array near the top of `install.sh` to change the
+offered voice ids. It includes the existing voices `af_bella`, `af_sky`,
+`af_heart`, `af_aoede`, `af_kore`, `af_jessica` and `af_sarah`. Reordering or
+extending this list does not change runtime defaults. Saved choices are kept in
+`~/.config/agent-tts/voices.json`, preselected on later manual runs, and still
+offered if removed from the catalog. Codex accounts share their family's voice.
+The per-runtime defaults listed above remain unchanged.
+
+Manual selection and `--sync-harnesses` enable automatic hook management via
+`~/.config/agent-tts/harness-hooks.enabled`. The installed `tts-reconcile`
+command reuses saved choices without prompting, compiling or downloading. It
+leaves existing event-category settings intact and does nothing after integration
+is disabled. Explicit `ATTS_VOICE` and per-runtime `ATTS_*_VOICE` overrides take
+precedence over saved ACC voice choices. Existing ACC fallbacks remain in use
+when no choice is saved. Run `tts-reconcile --help` for its usage.
 
 GPU Python dependencies are pinned in `uv.lock` and exported with hashes in
 `requirements-gpu.txt`. The project-level `exclude-newer = "24 hours"` policy
@@ -259,10 +287,25 @@ user-authored hooks; reruns also remove the retired Agent Command Center
 
 ## Integration with Agent Command Center
 
-The master `installation_scripts/install.sh` exposes this repository directly.
-For backward-compatible standalone ACC installs,
-`AGENT_COMMAND_CENTER_INSTALL_TTS_ANNOUNCEMENTS=1` still delegates to this
-installer.
+The master setup chain clones this repository before Agent Command Center.
+ACC exposes `tts_announcements` as an optional installer component (off until
+selected). Its configuration action opens this repository's voice picker;
+normal installation delegates to `--sync-harnesses` without a nested menu.
+The legacy `AGENT_COMMAND_CENTER_INSTALL_TTS_ANNOUNCEMENTS=1` install-time
+opt-in uses the same path.
+
+```bash
+bash ~/projects/agent_command_center/install.sh --select tts_announcements
+bash ~/projects/agent_command_center/install.sh --configure-component tts_announcements
+```
+
+When enabled, ACC runs the installed reconciler after every new Codex account
+is created and when installed harnesses are refreshed, including the login-time
+refresh. New accounts receive the lifecycle and attention hooks with the saved
+Codex voice. Opting out through ACC or `bash install.sh --disable-harnesses`
+removes managed hooks across the detected harness families and prevents later
+account creation from restoring them. Saved voice choices and unrelated hooks
+are retained. The speech engine remains available for direct use.
 
 ## Detect, reconfigure, and uninstall
 
@@ -275,8 +318,8 @@ bash install.sh --reconfigure a,b   # re-apply (idempotent) these component ids
 bash install.sh --uninstall a,b     # uninstall these component ids
 ```
 
-In the interactive menu (run `bash install.sh` on a terminal, or via the master
-installer), already-installed components show a green `✓`. Select one with
+In the shared component menu (when exposed through a parent installer),
+already-installed components show a green `✓`. Select one with
 **space** to **reconfigure** it (`~`), press **`u`** to mark it for **uninstall**
 (`✗`), or press **`r`** to reconfigure every installed component at once. Detection
 uses a live check where deterministic and otherwise an install receipt under
