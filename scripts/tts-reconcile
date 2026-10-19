@@ -7,10 +7,14 @@ import sys
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT / 'lib'))
-from tts_announcements.installation import main
-
 if __name__ == '__main__':
+    if len(sys.argv) > 1:
+        print('Usage: tts-reconcile (reapply enabled hooks with saved voices)')
+        raise SystemExit(0 if sys.argv[1:] in (['--help'], ['-h']) else 2)
+    if not (Path.home() / '.config/agent-tts/harness-hooks.enabled').is_file():
+        raise SystemExit(0)
+    from tts_announcements.installation import main
     program = _ROOT / 'scripts/notify-agent'
     command = shlex.quote(str(program)) if program.is_file() else 'python3 ' + shlex.quote(str(_ROOT / 'scripts/notify_agent.py'))
     raise SystemExit(main(['--home', str(Path.home()), '--command', command,
-                          '--sync', '--require-enabled', *sys.argv[1:]]))
+                          '--sync', '--require-enabled']))

@@ -88,6 +88,17 @@ if ! declare -F isc_activate_components >/dev/null 2>&1; then
   printf 'Clone it beside this repository, set ISC_FUNCTIONS_DIR, or configure authenticated Git access.\n' >&2
   exit 1
 fi
+# All work is per-user, including invocation from a sudo-driven setup chain.
+if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+  TARGET_USER="$SUDO_USER"
+  TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+  RUNTIME_DIR="/run/user/$(id -u "$TARGET_USER")"
+  USER_BUS="unix:path=$RUNTIME_DIR/bus"
+  DISPLAY_VAL="${DISPLAY:-:0}"
+  isc_load_helpers
+  run_as_target bash "$SCRIPT_DIR/install.sh" "$@"
+  exit $?
+fi
 isc_activate_components
 unset __isc_d __isc_ref __isc_safe_ref __isc_cache __isc_clone_tmp __isc_git_url __isc_raw __isc_loader_tmp
 source "$SCRIPT_DIR/installer/components.sh"
@@ -97,6 +108,13 @@ source "$SCRIPT_DIR/installer/components.sh"
 # Returns: zero after successful installation or cancellation.
 main() {
   printf 'parameters=%s\n' "$*" >&2
+  if [ "${1:-}" = --disable-harnesses ]; then
+    if [ "$#" -ne 1 ]; then printf 'Usage: bash install.sh --disable-harnesses\n' >&2; return 2; fi
+    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.installation \
+      --home "$(tts_target_home)" --command "" --disable
+    printf '0\n' >&2
+    return 0
+  fi
   if [ "${1:-}" = --sync-harnesses ]; then
     if [ "$#" -ne 1 ]; then printf 'Usage: bash install.sh --sync-harnesses\n' >&2; return 2; fi
     if [ ! -f "$(tts_event_config_file)" ]; then export TTS_MANUAL_EVENTS_NEW=1; fi
@@ -123,7 +141,12 @@ main() {
 # Listing/help must print only their own output (the master installer parses
 # --list-components); bypass the surrounding messages for those.
 case "${1:-}" in
-  --list-components|--export-selection|--detect|--help|-h|--uninstall|--uninstall=*) component_main "$@"; exit $? ;;
+  --help|-h)
+    printf 'Manual terminal install: detect installed harnesses and choose voices with arrow keys.\n'
+    printf '  --sync-harnesses     Apply hooks to detected harnesses using saved voices, without prompts.\n'
+    printf '  --disable-harnesses  Remove managed hooks and disable automatic reconciliation; retain voices.\n'
+    component_main --help; exit $? ;;
+  --list-components|--export-selection|--detect|--uninstall|--uninstall=*) component_main "$@"; exit $? ;;
 esac
 
 main "$@"

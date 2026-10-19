@@ -225,3 +225,58 @@ def test_sync_rejects_invalid_preferences_without_replacing_user_hooks(tmp_path)
         assert hooks.read_text() == before, arguments
         assert preferences.read_text() == '["bad"]', arguments
     print(None)
+
+
+def test_disabling_integration_removes_only_managed_hooks_and_keeps_voices(tmp_path):
+    """Opting out removes managed hooks and prevents future automatic recreation.
+
+    Parameters: tmp_path - isolated target home.
+    Returns: None.
+    """
+    print(f'tmp_path={tmp_path}')
+    home = tmp_path / 'home'
+    (home / '.codex-qwen').mkdir(parents=True)
+    run_manual(home, [b'\n'])
+    hooks = home / '.codex-qwen/hooks.json'
+    data = json.loads(hooks.read_text())
+    data['hooks']['Stop'].append({'hooks': [{'type': 'command', 'command': 'echo keep'}]})
+    hooks.write_text(json.dumps(data))
+    preferences = (home / '.config/agent-tts/voices.json').read_text()
+    env = {'HOME': str(home), 'TTS_TARGET_HOME': str(home), 'PATH': str(home / 'bin'),
+           'ISC_FUNCTIONS_DIR': str(FRAMEWORK), 'TTS_SKIP_SYSTEMD': '1',
+           'ATTS_INSTALL_GPU_RUNTIME': '0', 'TTS_LOG_DIR': str(home / 'logs')}
+    result = subprocess.run(['bash', str(ROOT / 'install.sh'), '--disable-harnesses'],
+                            env=env, text=True, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert not (home / '.config/agent-tts/harness-hooks.enabled').exists()
+    assert 'notify_agent' not in hooks.read_text()
+    assert 'echo keep' in hooks.read_text()
+    assert (home / '.config/agent-tts/voices.json').read_text() == preferences
+    result = subprocess.run([str(home / '.local/bin/tts-reconcile')], env=env,
+                            text=True, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert 'notify_agent' not in hooks.read_text()
+    print(None)
+
+
+def test_uninstalling_hook_files_disables_reconciliation(tmp_path):
+    """Removing the hook runtime also removes its automatic entrypoint and opt-in.
+
+    Parameters: tmp_path - isolated target home.
+    Returns: None.
+    """
+    print(f'tmp_path={tmp_path}')
+    home = tmp_path / 'home'
+    (home / '.codex').mkdir(parents=True)
+    run_manual(home, [b'\n'])
+    saved = (home / '.config/agent-tts/voices.json').read_text()
+    env = {'HOME': str(home), 'TTS_TARGET_HOME': str(home), 'PATH': str(home / 'bin'),
+           'ISC_FUNCTIONS_DIR': str(FRAMEWORK), 'TTS_SKIP_SYSTEMD': '1',
+           'ATTS_INSTALL_GPU_RUNTIME': '0', 'TTS_LOG_DIR': str(home / 'logs')}
+    result = subprocess.run(['bash', str(ROOT / 'install.sh'), '--uninstall', 'hook_files'],
+                            env=env, text=True, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert not (home / '.config/agent-tts/harness-hooks.enabled').exists()
+    assert not (home / '.local/bin/tts-reconcile').exists()
+    assert (home / '.config/agent-tts/voices.json').read_text() == saved
+    print(None)
