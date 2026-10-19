@@ -17,7 +17,6 @@ DEFAULT_VOICES = {
     'cline': 'af_aoede', 'grok': 'af_kore', 'openrouter': 'af_jessica',
     'nvidia': 'af_sarah', 'opencode': 'af_heart',
 }
-VOICES = tuple(dict.fromkeys(DEFAULT_VOICES.values()))
 HARNESS_HOMES = {
     'codex': ('.codex', ('codex',)), 'claude': ('.claude', ('claude',)),
     'qwen': ('.codex-qwen', ('qwen',)), 'cline': ('.cline', ('cline',)),
@@ -142,18 +141,18 @@ def configure_harness(kind, homes, voice, command):
     print(None, file=sys.stderr)
 
 
-def configure_installation(home, command):
+def configure_installation(home, command, voices):
     """Collect choices before saving them and configuring discovered harnesses.
 
-    Parameters: home - target home; command - installed notifier command.
+    Parameters: home - target home; command - installed notifier command; voices - offered voice ids.
     Returns: None.
     """
-    print(f'home={home}, command={command}', file=sys.stderr)
+    print(f'home={home}, command={command}, voices={voices}', file=sys.stderr)
     harnesses = discover_harnesses(home)
     preferences = read_preferences(home)
     selected = dict(preferences)
     for kind in harnesses:
-        voice = choose_voice(kind, preferences.get(kind, DEFAULT_VOICES[kind]), VOICES)
+        voice = choose_voice(kind, preferences.get(kind, DEFAULT_VOICES[kind]), voices)
         if voice is None:
             print('Selection cancelled; harness hooks and voice choices unchanged.')
             print(None, file=sys.stderr)
@@ -180,12 +179,13 @@ def parse_arguments(argv):
     """Parse installer syntax once before dispatching operations.
 
     Parameters: argv - raw command-line arguments.
-    Returns: parsed target home and notifier command.
+    Returns: parsed target home, notifier command and voice catalog.
     """
     print(f'argv={argv}', file=sys.stderr)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--home', type=Path, required=True)
     parser.add_argument('--command', required=True)
+    parser.add_argument('--voices', nargs='+', required=True)
     result = parser.parse_args(argv)
     print(result, file=sys.stderr)
     return result
@@ -199,7 +199,7 @@ def main(argv=None):
     """
     print(f'argv={argv}', file=sys.stderr)
     args = parse_arguments(argv)
-    configure_installation(args.home, args.command)
+    configure_installation(args.home, args.command, args.voices)
     print(0, file=sys.stderr)
     return 0
 
