@@ -88,10 +88,23 @@ isc_activate_components
 unset __isc_d __isc_ref __isc_safe_ref __isc_cache __isc_clone_tmp __isc_git_url __isc_raw __isc_loader_tmp
 source "$SCRIPT_DIR/installer/components.sh"
 
+# Install detected harnesses with a per-family voice choice on a real terminal.
+# Parameters: positional arguments - component runtime options.
+# Returns: zero after successful installation or cancellation.
 main() {
+  printf 'parameters=%s\n' "$*" >&2
+  if [ "$#" -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
+    if [ ! -f "$(tts_event_config_file)" ]; then export TTS_MANUAL_EVENTS_NEW=1; fi
+    ensure_tts_core
+    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.installation \
+      --home "$(tts_target_home)" --command "$(tts_hook_command)"
+    printf '0\n' >&2
+    return 0
+  fi
   tts_msg "Installing Codex/Claude Code TTS announcement hooks"
   component_main "$@"
   tts_msg "TTS announcement hooks installed."
+  printf '0\n' >&2
 }
 
 # Listing/help must print only their own output (the master installer parses
