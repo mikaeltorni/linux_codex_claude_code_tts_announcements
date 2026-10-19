@@ -151,6 +151,30 @@ def configure_installation(home, command, voices, interactive=True, require_enab
     print(None, file=sys.stderr)
 
 
+def disable_installation(home):
+    """Remove managed hooks and stop automatic reconciliation, retaining voice choices.
+
+    Parameters: home - target user's home directory.
+    Returns: None.
+    """
+    print(f'home={home}', file=sys.stderr)
+    (home / '.config/agent-tts/harness-hooks.enabled').unlink(missing_ok=True)
+    for kind, homes in discover_harnesses(home).items():
+        for directory in homes:
+            if kind in ('codex', 'qwen', 'openrouter', 'nvidia'):
+                install_hooks.remove_codex_hooks(directory / 'hooks.json',
+                                                 ('UserPromptSubmit', 'Stop', 'PermissionRequest'))
+            elif kind == 'claude':
+                install_hooks.remove_claude_hooks(directory / 'settings.json', '')
+            elif kind == 'grok':
+                install_hooks.remove_grok_notify(directory / 'config.toml')
+            elif kind == 'cline':
+                for event in ('TaskStart', 'TaskResume', 'TaskComplete', 'TaskCancel',
+                              'TaskError', 'UserPromptSubmit', 'PreToolUse'):
+                    install_hooks.remove_cline_hook(directory / 'hooks' / event)
+    print(None, file=sys.stderr)
+
+
 def parse_arguments(argv):
     """Parse installer syntax once before dispatching operations.
 
@@ -162,7 +186,9 @@ def parse_arguments(argv):
     parser.add_argument('--home', type=Path, required=True)
     parser.add_argument('--command', required=True)
     parser.add_argument('--voices', nargs='+', default=list(DEFAULT_VOICES.values()))
-    parser.add_argument('--sync', action='store_true')
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--sync', action='store_true')
+    modes.add_argument('--disable', action='store_true')
     parser.add_argument('--require-enabled', action='store_true')
     result = parser.parse_args(argv)
     print(result, file=sys.stderr)
@@ -177,7 +203,10 @@ def main(argv=None):
     """
     print(f'argv={argv}', file=sys.stderr)
     args = parse_arguments(argv)
-    configure_installation(args.home, args.command, args.voices, not args.sync, args.require_enabled)
+    if args.disable:
+        disable_installation(args.home)
+    else:
+        configure_installation(args.home, args.command, args.voices, not args.sync, args.require_enabled)
     print(0, file=sys.stderr)
     return 0
 

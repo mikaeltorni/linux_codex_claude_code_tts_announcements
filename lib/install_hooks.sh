@@ -605,12 +605,18 @@ detect_cline_user_prompt()   { _tts_cline_has_event UserPromptSubmit; }
 detect_cline_pre_tool_use()  { _tts_cline_has_event PreToolUse; }
 
 uninstall_engine() {
+  # Remove the engine and disable automatic hook recreation.
+  # Parameters: none.
+  # Returns: zero after removing managed engine files.
+  printf 'parameters=none\n' >&2
+  rm -f "$(tts_target_home)/.config/agent-tts/harness-hooks.enabled"
   tts_msg "Removing agent-tts engine"
   rm -f "$(tts_bin_dir)/agent-tts"
   rm -rf "$(tts_install_root)/lib/agent_tts" \
          "$(tts_install_root)/scripts/agent-tts" \
          "$(tts_install_root)/gpu-runtime"
   rm -f "$(tts_install_root)/requirements-gpu.txt"
+  printf '0\n' >&2
 }
 uninstall_boot_prewarm() {
   tts_msg "Removing boot prewarm service"
@@ -628,12 +634,23 @@ uninstall_start_voice()     { tts_set_event_setting ATTS_ANNOUNCE_START 0; }
 uninstall_finish_voice()    { tts_set_event_setting ATTS_ANNOUNCE_FINISH 0; }
 uninstall_attention_voice() { tts_set_event_setting ATTS_ANNOUNCE_ATTENTION 0; }
 uninstall_hook_files() {
+  # Remove the managed notification runtime and automatic opt-in, retaining voices.
+  # Parameters: none.
+  # Returns: zero after removing managed hook runtime files.
+  printf 'parameters=none\n' >&2
+  rm -f "$(tts_target_home)/.config/agent-tts/harness-hooks.enabled" \
+        "$(tts_bin_dir)/tts-reconcile" \
+        "$(tts_install_root)/scripts/tts-reconcile" \
+        "$(tts_install_root)/scripts/notify-agent" \
+        "$(tts_install_root)/scripts/tts-hooks" \
+        "$(tts_install_root)/lib/tts_announcements/installation.py"
   tts_msg "Removing TTS notify hook files"
   # Keep __init__.py + logging_utils.py: agent-tts imports the repository's
   # centralized logger even when no runtime notify hooks are installed.
   rm -f "$(tts_install_root)/lib/tts_announcements/install_hooks.py" \
         "$(tts_install_root)/lib/tts_announcements/notify.py" \
         "$(tts_install_root)/scripts/notify_agent.py"
+  printf '0\n' >&2
 }
 uninstall_codex_notify() {
   local home config_file hooks_file codex_home
