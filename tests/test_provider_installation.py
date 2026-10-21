@@ -46,6 +46,7 @@ def run_installer(home, owner, selection, status='0'):
     env = {'HOME': str(home), 'TTS_TARGET_HOME': str(home), 'PATH': '/usr/bin:/bin',
            'ISC_FUNCTIONS_DIR': str(FRAMEWORK), 'TTS_SKIP_SYSTEMD': '1',
            'ATTS_INSTALL_GPU_RUNTIME': '0', 'TTS_LOG_DIR': str(home/'logs'),
+           'TTS_INSTALL_SPEECH_RUNTIME': '0',
            'TTS_CLI_SETUP_DIR': str(owner), 'TTS_TEST_OWNER_STATUS': status}
     result = subprocess.run(['bash', str(ROOT/'install.sh'), '--install-harnesses', selection],
                             env=env, text=True, capture_output=True, timeout=20)

@@ -20,6 +20,7 @@ ISC_COMPONENTS=(
   "codex_cli|Install native Codex CLI (optional)|off|tts_install_codex_cli|tts_detect_codex_cli||Native CLIs"
   "claude_cli|Install native Claude Code CLI (optional)|off|tts_install_claude_cli|tts_detect_claude_cli||Native CLIs"
   "engine|Agent TTS (agent-tts) speech engine|on|install_agent_tts_engine|detect_engine|uninstall_engine|Core"
+  "speech_runtime|Kokoro speech runtime and verified voice models|on|tts_install_speech_runtime|||Core"
   "hook_files|TTS notify hook files|on|install_tts_hook_files|detect_hook_files|uninstall_hook_files|Core"
   "boot_prewarm|Boot-time Kokoro prewarm (systemd user service)|on|install_boot_prewarm|detect_boot_prewarm|uninstall_boot_prewarm|Core"
   "start_voice|Start voice announcements|on|install_start_voice|detect_start_voice|uninstall_start_voice|Voice events"

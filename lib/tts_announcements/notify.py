@@ -2,8 +2,8 @@
 
 The module accepts legacy Codex notify JSON as the first CLI argument and
 Codex/Claude/Cline lifecycle hook JSON on stdin. It delegates speech and title
-updates to ``codex-agent-tracker`` so announcement wording remains centralized
-there.
+updates to ``codex-agent-tracker`` when installed. Without the tracker, speech
+calls the same standalone ``agent-tts`` owner; titles and tracking remain ACC-owned.
 
 Components:
   - RuntimeContext: Immutable resolved metadata for one hook event.
@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -127,15 +128,12 @@ def tracker_path() -> Path:
 
 
 def run_tracker(args: list[str]) -> bool:
-    """Run ``codex-agent-tracker`` with ``args`` and suppress hook output.
+    """Run ACC when available, or delegate standalone speech to agent-tts.
 
-    Args:
-        args: Argument vector appended after the tracker executable path.
-
-    Returns:
-        bool: ``True`` if the tracker exited with status 0, ``False`` if it
-        exited non-zero or could not be launched.
+    Parameters: args - internally generated tracker operation arguments.
+    Returns: whether the selected owner succeeded; tracker failures never replay speech.
     """
+    print(f'args={args}', file=sys.stderr)
     try:
         result = subprocess.run(
             [str(tracker_path()), *args],
@@ -143,6 +141,10 @@ def run_tracker(args: list[str]) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+    except FileNotFoundError:
+        result = run_standalone_speech(args)
+        print(result, file=sys.stderr)
+        return result
     except Exception as exc:
         # Include the total argv size: the historical failure mode here was
         # [Errno 7] Argument list too long from an unclipped transcript prompt.
@@ -151,15 +153,45 @@ def run_tracker(args: list[str]) -> bool:
             f"tracker launch failed ({arg_bytes} arg bytes): {exc}",
             component=LOG_COMPONENT,
         )
+        print(False, file=sys.stderr)
         return False
     if result.returncode != 0:
         log.warn(
             f"tracker exited {result.returncode} for args {args[:1]}",
             component=LOG_COMPONENT,
         )
+        print(False, file=sys.stderr)
         return False
     log.debug(f"tracker ok for args {args[:1]}", component=LOG_COMPONENT)
+    print(True, file=sys.stderr)
     return True
+
+
+def run_standalone_speech(args):
+    """Call the existing speech CLI for speech-only operations without ACC.
+
+    Parameters: args - internally generated announce, clarify or tracker-only arguments.
+    Returns: whether standalone speech succeeded; false for tracker-only operations.
+    """
+    print(f'args={args}', file=sys.stderr)
+    if not args or args[0] not in ('announce', 'clarify'):
+        print(False, file=sys.stderr)
+        return False
+    local = Path.home() / '.local/bin/agent-tts'
+    command = str(local) if local.is_file() else shutil.which('agent-tts')
+    if command is None:
+        print('Standalone speech unavailable: run bash install.sh --prepare-speech', file=sys.stderr)
+        print(False, file=sys.stderr)
+        return False
+    arguments = [args[0]]
+    for flag, value in zip(args[1::2], args[2::2]):
+        if flag != '--feature-key':
+            arguments.extend((flag, value))
+    completed = subprocess.run([command, *arguments], check=False, timeout=120,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    result = completed.returncode == 0
+    print(result, file=sys.stderr)
+    return result
 
 
 def parse_payload(argv: list[str], stdin_text: str | None = None) -> dict[str, Any]:
@@ -388,19 +420,13 @@ def announce(
     task_description: str = "",
     feature_key: str = "",
 ) -> bool:
-    """Ask the tracker to speak a start or finish announcement.
+    """Route a start or finish announcement through its available owner.
 
-    Args:
-        event: Announcement event keyword, typically ``"start"`` or ``"finish"``.
-        context: Resolved runtime context supplying label, project, and voice.
-        task_description: Optional task summary spoken on finish; omitted when
-            empty.
-        feature_key: Stable runtime session id used to isolate the title/finish
-            label cache from concurrent sessions in the same project.
-
-    Returns:
-        bool: ``True`` when the tracker reported success, ``False`` otherwise.
+    Parameters: event - start or finish; context - resolved project and voice;
+        task_description - optional task summary; feature_key - ACC session label key.
+    Returns: whether ACC or the standalone speech owner accepted the request.
     """
+    print(f'event={event}, context={context}, task_description={task_description}, feature_key={feature_key}', file=sys.stderr)
     args = [
         "announce",
         "--event",
@@ -422,21 +448,20 @@ def announce(
         args.extend(["--feature-key", feature_key])
     if task_description:
         args.extend(["--task-description", clip_text(task_description)])
-    return run_tracker(args)
+    result = run_tracker(args)
+    print(result, file=sys.stderr)
+    return result
 
 
 def clarify(context: RuntimeContext, question: str) -> bool:
-    """Ask the tracker to speak a clarification or attention prompt.
+    """Route an attention announcement through its available speech owner.
 
-    Args:
-        context: Resolved runtime context supplying label and project metadata.
-        question: The text to speak as the attention/clarification prompt.
-
-    Returns:
-        bool: ``True`` when the tracker reported success, ``False`` otherwise.
+    Parameters: context - resolved project metadata; question - attention text.
+    Returns: whether ACC or the standalone speech owner accepted the request.
     """
+    print(f'context={context}, question={question}', file=sys.stderr)
     voice = os.environ.get("CLAUDE_CLARIFY_VOICE", "").strip() or DEFAULT_CLARIFY_VOICE
-    return run_tracker(
+    result = run_tracker(
         [
             "clarify",
             "--question",
@@ -451,6 +476,8 @@ def clarify(context: RuntimeContext, question: str) -> bool:
             str(context.codex_home),
         ]
     )
+    print(result, file=sys.stderr)
+    return result
 
 
 def update_title(prompt: str, context: RuntimeContext, feature_key: str = "") -> bool:

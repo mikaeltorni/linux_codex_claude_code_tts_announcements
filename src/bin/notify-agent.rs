@@ -187,11 +187,44 @@ fn detach_foreground(payload: &Value) -> bool {
 }
 
 fn tracker(args: &[String]) -> bool {
+    // Run ACC when installed and fall back only when its executable is absent.
+    // Parameters: args - internally generated tracker arguments.
+    // Returns: whether the selected owner completed successfully.
+    eprintln!("args={args:?}");
     let program = env::var("CODEX_AGENT_TRACKER").unwrap_or_else(|_| {
         let local = home().join(".local/bin/codex-agent-tracker");
         if local.is_file() { local.display().to_string() } else { "codex-agent-tracker".into() }
     });
-    Command::new(program).args(args).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map(|status| status.success()).unwrap_or(false)
+    let result = match Command::new(program).args(args).stdout(Stdio::null()).stderr(Stdio::null()).status() {
+        Ok(status) => status.success(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => standalone_speech(args),
+        Err(_) => false,
+    };
+    eprintln!("{result}");
+    result
+}
+
+/// Delegate speech-only operations to the existing standalone speech owner.
+/// Parameters: args - internally generated tracker operation and flag/value pairs.
+/// Returns: whether standalone speech succeeded; false for tracker-only operations.
+fn standalone_speech(args: &[String]) -> bool {
+    eprintln!("args={args:?}");
+    if !matches!(args.first().map(String::as_str), Some("announce" | "clarify")) {
+        eprintln!("false");
+        return false;
+    }
+    let local = home().join(".local/bin/agent-tts");
+    let program = if local.is_file() { local } else { PathBuf::from("agent-tts") };
+    let mut command = Command::new(program);
+    command.arg(&args[0]);
+    for pair in args[1..].chunks_exact(2) {
+        if pair[0] != "--feature-key" {
+            command.args(pair);
+        }
+    }
+    let result = command.stdout(Stdio::null()).stderr(Stdio::null()).status().map(|status| status.success()).unwrap_or(false);
+    eprintln!("{result}");
+    result
 }
 
 fn parse_payload(args: &[String]) -> Value {
