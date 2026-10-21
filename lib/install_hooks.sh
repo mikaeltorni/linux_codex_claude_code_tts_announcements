@@ -266,6 +266,7 @@ install_tts_hook_files() {
   install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/logging_utils.py" "$root/lib/tts_announcements/logging_utils.py"
   install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/install_hooks.py" "$root/lib/tts_announcements/install_hooks.py"
   install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/notify.py" "$root/lib/tts_announcements/notify.py"
+  install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/terminal.py" "$root/lib/tts_announcements/terminal.py"
   install -m 0644 "$SCRIPT_DIR/lib/tts_announcements/installation.py" "$root/lib/tts_announcements/installation.py"
   install -m 0755 "$SCRIPT_DIR/scripts/tts-reconcile" "$root/scripts/tts-reconcile"
   mkdir -p "$(tts_bin_dir)"
@@ -722,3 +723,61 @@ uninstall_cline_task_cancel()   { _tts_remove_cline_event TaskCancel; }
 uninstall_cline_task_error()    { _tts_remove_cline_event TaskError; }
 uninstall_cline_user_prompt()   { _tts_remove_cline_event UserPromptSubmit; }
 uninstall_cline_pre_tool_use()  { _tts_remove_cline_event PreToolUse; }
+
+# Delegate optional native CLI provisioning to the standalone provider owner.
+# Parameters: $1 - ask, missing, none, or comma-separated codex/claude names.
+# Returns: delegated installer status; 130 means selection cancellation.
+tts_prepare_providers() {
+  printf 'selection=%s\n' "$1" >&2
+  local status=0
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.providers \
+    --home "$(tts_target_home)" --selection "$1" || status=$?
+  printf '%s\n' "$status" >&2
+  return "$status"
+}
+
+# Install the optional Codex CLI through its native owner.
+# Parameters: none.
+# Returns: delegated installer status.
+tts_install_codex_cli() {
+  printf 'parameters=none\n' >&2
+  local status=0
+  tts_prepare_providers codex || status=$?
+  export PATH="$(tts_target_home)/.local/bin:$PATH"
+  printf '%s\n' "$status" >&2
+  return "$status"
+}
+
+# Install the optional Claude Code CLI through its native owner.
+# Parameters: none.
+# Returns: delegated installer status.
+tts_install_claude_cli() {
+  printf 'parameters=none\n' >&2
+  local status=0
+  tts_prepare_providers claude || status=$?
+  export PATH="$(tts_target_home)/.local/bin:$PATH"
+  printf '%s\n' "$status" >&2
+  return "$status"
+}
+
+# Detect the native Codex command without installing anything.
+# Parameters: none.
+# Returns: zero when the CLI is executable; one otherwise.
+tts_detect_codex_cli() {
+  printf 'parameters=none\n' >&2
+  local status=0
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.providers --home "$(tts_target_home)" --detect codex || status=$?
+  printf '%s\n' "$status" >&2
+  return "$status"
+}
+
+# Detect the native Claude command without installing anything.
+# Parameters: none.
+# Returns: zero when the CLI is executable; one otherwise.
+tts_detect_claude_cli() {
+  printf 'parameters=none\n' >&2
+  local status=0
+  PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.providers --home "$(tts_target_home)" --detect claude || status=$?
+  printf '%s\n' "$status" >&2
+  return "$status"
+}

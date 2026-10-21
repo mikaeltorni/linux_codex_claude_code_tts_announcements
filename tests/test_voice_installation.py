@@ -13,13 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 FRAMEWORK = Path(os.environ.get('ISC_FUNCTIONS_DIR', Path.home() / 'projects/linux_installation_scripts_functions'))
 
 
-def run_manual(home, keys, checkout=ROOT):
-    """Run the public installer on a terminal and answer each voice prompt.
+def run_manual(home, keys, checkout=ROOT, providers="none", owner=None):
+    """Run the public installer on a terminal and answer provider and voice prompts.
 
-    Parameters: home - isolated target home; keys - bytes to send per prompt; checkout - installer checkout.
+    Parameters: home - isolated target home; keys - bytes to send per prompt; checkout - installer checkout; providers - optional CLI selection; owner - optional fixture provider repository.
     Returns: terminal output after successful installation.
     """
-    print(f"home={home}, keys={keys}, checkout={checkout}")
+    print(f"home={home}, keys={keys}, checkout={checkout}, providers={providers}, owner={owner}")
     binary_dir = home / 'bin'
     binary_dir.mkdir(exist_ok=True)
     for name in ('bash', 'python3', 'dirname', 'mkdir', 'install', 'ln', 'date', 'sed',
@@ -34,7 +34,9 @@ def run_manual(home, keys, checkout=ROOT):
         ['bash', str(checkout / 'install.sh')], stdin=slave, stdout=slave, stderr=slave,
         env={'HOME': str(home), 'TTS_TARGET_HOME': str(home), 'PATH': str(binary_dir),
              'ISC_FUNCTIONS_DIR': str(FRAMEWORK), 'TTS_SKIP_SYSTEMD': '1',
-             'ATTS_INSTALL_GPU_RUNTIME': '0', 'TTS_LOG_DIR': str(home / 'logs')},
+             'ATTS_INSTALL_GPU_RUNTIME': '0', 'TTS_LOG_DIR': str(home / 'logs'),
+             'TTS_INSTALL_HARNESSES': providers,
+             **({'TTS_CLI_SETUP_DIR': str(owner)} if owner is not None else {})},
     )
     os.close(slave)
     output = b''

@@ -7,10 +7,9 @@ from pathlib import Path
 import shlex
 import shutil
 import sys
-import termios
-import tty
 
 from . import install_hooks
+from .terminal import choose_option
 
 from agent_tts.voices import DEFAULT_VOICES, read_preferences
 
@@ -50,32 +49,7 @@ def choose_voice(kind, current, voices):
     Returns: selected voice id, or None when the whole selection is cancelled.
     """
     print(f'kind={kind}, current={current}, voices={voices}', file=sys.stderr)
-    options = list(dict.fromkeys((*voices, current)))
-    index = options.index(current)
-    descriptor = sys.stdin.fileno()
-    previous = termios.tcgetattr(descriptor)
-    result = None
-    try:
-        tty.setraw(descriptor)
-        print(f'Voice for {kind}: ↑/↓ to choose, Enter to confirm, q to cancel', flush=True)
-        while True:
-            print('\r\033[K' + '  '.join(('> ' if i == index else '') + value
-                                        for i, value in enumerate(options)), end='', flush=True)
-            key = os.read(descriptor, 1)
-            if key in (b'\r', b'\n'):
-                result = options[index]
-                break
-            if key in (b'q', b'\x03', b'\x04', b''):
-                break
-            if key == b'\x1b':
-                sequence = os.read(descriptor, 2)
-                if sequence in (b'[A', b'[D'):
-                    index = (index - 1) % len(options)
-                elif sequence in (b'[B', b'[C'):
-                    index = (index + 1) % len(options)
-    finally:
-        termios.tcsetattr(descriptor, termios.TCSADRAIN, previous)
-        print()
+    result = choose_option(f'Voice for {kind}', current, voices)
     print(result, file=sys.stderr)
     return result
 
