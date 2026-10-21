@@ -27,8 +27,10 @@ This repository has two layers with different dependencies:
   Command Center) for start/finish/attention announcements, so that the spoken
   finish label is summarized once and shared with the terminal title. Claude
   hooks forward the runtime session id so concurrent sessions in one project
-  cannot reuse each other's title/finish labels. When the tracker is absent the
-  hooks simply do nothing; nothing here *requires* ACC to build or install.
+  cannot reuse each other's title/finish labels. When the tracker executable
+  is absent, speech operations use the same installed `agent-tts` CLI directly;
+  titles and task summarization remain ACC-owned. Nothing here requires ACC
+  to build, install, or speak lifecycle announcements.
 - **Build-time (soft):** the shared installer component framework
   [`linux_installation_scripts_functions`](https://github.com/mikaeltorni/linux_installation_scripts_functions) —
   loaded from a sibling checkout when present. A standalone private checkout
@@ -198,13 +200,19 @@ and terminal titles, and unbounded text previously aborted the launch with
 
 ## Prerequisites
 
-- The Kokoro model assets under `<codex-home>/tts` (installed by Agent Command
-  Center's LM Studio component) and `uvx` for synthesis; `ffmpeg` for volume.
+- `ffmpeg` and `libportaudio2` for the installed speech runtime. On Ubuntu,
+  install these separately with `sudo apt-get install -y ffmpeg libportaudio2`.
+  The normal terminal installer and `--prepare-speech` install an isolated CPU
+  Kokoro runtime plus verified model/voice assets under
+  `~/.local/share/codex-claude-tts-announcements/`; ACC is not required.
+  Existing `<codex-home>/tts` assets and the legacy `uvx` path remain supported.
 - Optional GPU synthesis needs an NVIDIA GPU and `uv`. The installer places the
   CUDA 12/cuDNN runtime under
   `~/.local/share/codex-claude-tts-announcements/gpu-runtime`; set
   `ATTS_INSTALL_GPU_RUNTIME=0` while installing to keep a CPU-only setup.
-- For the notify hooks: `codex-agent-tracker` (Agent Command Center).
+- With ACC installed, notify hooks keep its tracker/title/task-summary behavior.
+  Without its tracker executable, speech calls the installed `agent-tts` directly.
+  An installed tracker returning an error never causes duplicate fallback speech.
 
 ## Installation
 
@@ -216,6 +224,7 @@ bash install.sh --install-harnesses claude # install Claude only, then sync dete
 bash install.sh --install-harnesses missing # install only missing native CLIs, then sync
 bash install.sh --install-harnesses none # skip CLI installation, sync detected hooks
 bash install.sh --sync-harnesses  # detected harnesses, saved voices, no prompts
+bash install.sh --prepare-speech # install speech runtime/models, then sync hooks
 bash install.sh --disable-harnesses # remove managed hooks; retain voice choices
 tts-reconcile                # refresh enabled hooks without building/downloading
 bash install.sh --default    # legacy component defaults, no prompts
@@ -250,7 +259,7 @@ For a fresh Ubuntu machine, install the optional provider bootstrap prerequisite
 separately, then run the TTS installer as your normal desktop user:
 
 ```bash
-sudo apt-get install -y git ca-certificates curl build-essential nodejs npm
+sudo apt-get install -y git ca-certificates curl build-essential nodejs npm ffmpeg libportaudio2
 bash install.sh --install-harnesses codex,claude
 export PATH="$HOME/.local/bin:$PATH"
 hash -r
@@ -263,15 +272,37 @@ The owner bootstraps a user-local Rust toolchain when needed and persists
 uses the official Codex npm package; `TTS_CODEX_SOURCE=fork` delegates the
 owner's local-fork build path and requires its additional build dependencies
 and fork access. CLI sign-in remains a separate user action. These steps install
-CLIs and hooks; speech still needs the synthesis/tracker prerequisites above.
+CLIs, speech runtime, verified models and hooks. System packages listed above
+are reported separately when absent; the user-level installer never runs sudo.
 
-The standalone terminal, `--install-harnesses`, `--sync-harnesses`, and
+The standalone terminal, `--install-harnesses`, `--prepare-speech`, `--sync-harnesses`, and
 `--disable-harnesses` paths do not need the shared component framework when run
 as a normal user. Legacy component commands and sudo-chain targeting still use
 that framework. `--install-harnesses=VALUE` also accepts the selectors above;
 `ask` is accepted with a real terminal. Unattended calls should use explicit
 providers, `missing`, or `none`. Delegated failures propagate before TTS hooks
 are enabled; provider installation itself may already have made changes.
+
+`--prepare-speech` is the complete unattended speech setup used by ACC. It
+reuses saved voices and event settings, installs hash-pinned CPU dependencies,
+and downloads SHA-256-verified Kokoro v1.0 model/voice files. When uv is absent,
+it bootstraps the pinned verified uv release into the speech owner's directory.
+`--sync-harnesses` refreshes the engine and hooks without preparing CPU synthesis
+dependencies or models; `tts-reconcile` remains free of builds and downloads.
+Set `TTS_INSTALL_SPEECH_RUNTIME=0` only to explicitly skip runtime provisioning
+(for example, an offline deployment with synthesis already installed).
+
+CPU dependencies are pinned with hashes in `requirements-speech.txt`, generated
+from `requirements-speech.in` under the rolling 24-hour publication delay:
+
+```bash
+uv pip compile --generate-hashes --exclude-newer '24 hours' --python-version 3.12 \
+  requirements-speech.in -o requirements-speech.txt
+```
+
+The fresh Ubuntu VM regression replays the reported greeting's start/finish
+hooks and captures non-silent audio from the actual output sink. CLI version
+checks and installed hooks alone do not establish that speech works.
 
 Voice selection detects supported command names on `PATH`
 and existing configuration homes: Codex (including `.codex-account-N`), Claude
@@ -315,6 +346,7 @@ that core**, so the program works no matter which subset you pick.
 | `codex_cli` | optional, default-off native Codex CLI through the setup owner |
 | `claude_cli` | optional, default-off native Claude Code CLI through the setup owner |
 | `engine` | `agent-tts` speech engine + `~/.local/bin/agent-tts` symlink |
+| `speech_runtime` | default-on isolated CPU Kokoro dependencies and verified voice/model files |
 | `hook_files` | notify hook code under `~/.local/share/codex-claude-tts-announcements/` |
 | `boot_prewarm` | login-time `agent-tts-prewarm.service` user unit |
 | `start_voice` | enable start announcements for every runtime |

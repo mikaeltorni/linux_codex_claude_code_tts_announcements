@@ -24,7 +24,8 @@ is absent, speech operations call the same installed `agent-tts` CLI directly;
 title and tracking operations remain ACC-owned. Never replay through the fallback
 after an installed tracker fails, since it may already have spoken. Nothing here
 may become a hard dependency on ACC. `--prepare-speech` owns the isolated CPU
-runtime and verified model assets; `--sync-harnesses` remains download-free.
+runtime and verified model assets; `--sync-harnesses` does not bootstrap that
+CPU runtime or model assets. The installed `tts-reconcile` remains download-free.
 Feature labels are keyed per session: ACC launchers export
 `CODEX_AGENT_FEATURE_KEY`, and hooks prefer that inherited key over the hook
 payload's session id (`runtime_feature_key` in `notify.py`) so a tracked
