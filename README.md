@@ -1,9 +1,35 @@
-# Linux Codex/Claude Code TTS Announcements
+# Linux Codex/Claude Code TTS Announcements — Linux TTS Hooks for AI Coding Agents
 
-> Part of [installation_scripts](https://github.com/mikaeltorni/installation_scripts) — the standalone **`agent-tts`** text-to-speech engine and notify hooks for **Codex**, **Claude Code**, **Cline**, **Grok**, **Qwen**, **OpenRouter**, and **NVIDIA** agents. Tested on Ubuntu 24.04.4 LTS; the Python engine is largely portable but the audio playback backend is currently Linux-specific (Windows/macOS untested).
+[![Last commit: Oct 21, 2026](https://img.shields.io/badge/Last%20commit-Oct%2021%2C%202026-blue?style=flat-square)](https://github.com/mikaeltorni/linux_codex_claude_code_tts_announcements/commits/master) [![Commit activity: active this month](https://img.shields.io/badge/Commit%20activity-active%20this%20month-brightgreen?style=flat-square)](https://github.com/mikaeltorni/linux_codex_claude_code_tts_announcements/graphs/commit-activity) [![Issues: 0 open](https://img.shields.io/badge/Issues-0%20open-lightgrey?style=flat-square)](https://github.com/mikaeltorni/linux_codex_claude_code_tts_announcements/issues)
 
-The agent text-to-speech home for the supported coding agents on Linux. This
-repository ships two things:
+Linux Codex/Claude Code TTS Announcements is a Linux TTS hook engine that speaks lifecycle updates for developers using coding agents. Its standalone **`agent-tts`** engine and notify hooks support **Codex**, **Claude Code**, **Cline**, and **Grok**; Kokoro synthesis and audio playback run locally on Linux.
+
+![Flow diagram showing Codex CLI, Claude Code, Cline, and Grok events passing through agent-tts and Kokoro to Linux audio playback.](docs/social-card.png)
+
+Part of [installation_scripts](https://github.com/mikaeltorni/installation_scripts). The Python speech engine is largely portable, but the audio playback backend is Linux-specific; Windows and macOS playback are untested.
+
+**Contents:** [Quick start](#quick-start) · [Features](#linux-tts-features-for-coding-agents) · [Configuration](#configuration-linux-tts-voices-and-playback) · [Installation](#installing-linux-tts-hooks) · [Troubleshooting](#troubleshooting-linux-tts-playback) · [FAQ](#frequently-asked-questions-about-linux-tts-hooks) · [Contributing](#contributing) · [License](#license-and-disclaimer)
+
+## Quick start
+
+Install the isolated CPU Kokoro runtime and synchronize hooks for detected agents:
+
+```bash
+bash install.sh --prepare-speech
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Use the standalone speech command to speak a line, announce an event, or ask for input:
+
+```bash
+agent-tts voice --text "The coding agent is ready." --voice af_sky
+agent-tts announce --event finish --project-name "Demo project" --voice af_sky
+agent-tts clarify --project-name "Demo project" --voice af_sky
+```
+
+The installer does not replace or symlink the `codex` or `claude` binaries. See [Linux speech prerequisites](#linux-speech-prerequisites) before running speech for the first time.
+
+This repository ships two things:
 
 1. **`agent-tts`** — the speech command. Its commands are `voice`, `say`,
    `announce`, `clarify`, `prewarm`, `speed`, `volume`, and `silent`. When
@@ -13,7 +39,7 @@ repository ships two things:
 2. **Notify hooks** — Codex, Claude Code, Cline, and Grok hooks that turn agent lifecycle
    events into spoken start/finish/attention/danger announcements.
 
-## Repository dependencies
+## Linux TTS engine and hook dependencies
 
 This repository has two layers with different dependencies:
 
@@ -48,7 +74,7 @@ sets up the engine and hooks independently.
 See the full cross-repository map in
 [installation_scripts/DEPENDENCIES.md](https://github.com/mikaeltorni/installation_scripts/blob/master/DEPENDENCIES.md).
 
-## What it does
+## Linux TTS features for coding agents
 
 Notify hooks preserve ACC’s selected `CODEX_AGENT_MODEL_NAME` for start and
 finish announcements, with legacy Local/Qwen model variables as fallbacks.
@@ -88,7 +114,7 @@ When installed, this repo:
 
 It does not replace or symlink the `codex` or `claude` binaries.
 
-## The `agent-tts` engine
+## Using the standalone `agent-tts` CLI
 
 ```bash
 agent-tts voice --text "hello" --voice af_sky   # speak a literal line
@@ -113,7 +139,9 @@ fallback can handle the message. Kokoro calls time out instead of holding a
 cache lock forever, and later runs remove abandoned temporary work directories
 after their safe age threshold.
 
-Tunables (env overrides win over the persisted values):
+## Configuration: Linux TTS voices and playback
+
+Tunables (environment overrides win over persisted values):
 
 - `ATTS_SPEED` — speech speed multiplier (default `1.5`).
 - `ATTS_VOLUME_PERCENT` — linear volume percentage (default `1000`).
@@ -160,6 +188,9 @@ and the OS page cache before the first agent turn speaks, so the first
 announcement no longer pays the cold ~6 s startup on the critical path.
 Warming is best-effort (`Nice=10`, no audio, always exits 0) and never stalls
 the session. Run `agent-tts prewarm` by hand to warm the current shell.
+
+### Lifecycle announcement settings
+
 - `ATTS_ANNOUNCE_WORKSPACE=0` — disable the spoken workspace suffix. On X11,
   tmux announcements resolve the terminal attached to the announcing pane's
   session, using the client's window identity rather than the pane's inherited
@@ -183,7 +214,7 @@ the session. Run `agent-tts prewarm` by hand to warm the current shell.
 - `ATTS_STATE_DIR` — override the engine state/cache directory.
 - `ATTS_LOG_DIR` — override where `agent-tts` writes `voice.log`.
 
-## Logging
+## TTS logging and diagnostics
 
 Python diagnostics are routed through `lib/tts_announcements/logging_utils.py`.
 By default, source-checkout logs are written under this repository's `.log/`
@@ -198,7 +229,7 @@ to 600 characters before exec: these strings only feed spoken announcements
 and terminal titles, and unbounded text previously aborted the launch with
 `[Errno 7] Argument list too long`, silently dropping the announcement.
 
-## Prerequisites
+## Linux speech prerequisites
 
 - `ffmpeg` and `libportaudio2` for the installed speech runtime. On Ubuntu,
   install these separately with `sudo apt-get install -y ffmpeg libportaudio2`.
@@ -214,7 +245,7 @@ and terminal titles, and unbounded text previously aborted the launch with
   Without its tracker executable, speech calls the installed `agent-tts` directly.
   An installed tracker returning an error never causes duplicate fallback speech.
 
-## Installation
+## Installing Linux TTS hooks
 
 ```bash
 bash install.sh              # terminal: offer missing Codex/Claude, then choose voices
@@ -334,7 +365,7 @@ GPU Python dependencies are pinned in `uv.lock` and exported with hashes in
 prevents newly published dependency releases from entering a regenerated lock;
 plain `pip install <package>` is not a supported installation path.
 
-### Selectable components
+### Selectable coding-agent hook components
 
 Every individual notify hook is its own optional, default-on component, so you
 can wire up exactly the runtimes and lifecycle events you use. The `engine` and
@@ -373,7 +404,7 @@ user-authored hooks; reruns also remove the retired Agent Command Center
 `notify_agent.py` hook entries. None of these replace or symlink the `codex` or
 `claude` binaries.
 
-## Integration with Agent Command Center
+## Agent Command Center integration
 
 The master setup chain clones this repository before Agent Command Center.
 ACC exposes `tts_announcements` as an optional installer component (off until
@@ -395,7 +426,7 @@ removes managed hooks across the detected harness families and prevents later
 account creation from restoring them. Saved voice choices and unrelated hooks
 are retained. The speech engine remains available for direct use.
 
-## Detect, reconfigure, and uninstall
+## Reconfiguring and uninstalling Linux TTS hooks
 
 This installer tracks what it has installed and can re-apply or remove it, so you
 can refresh configuration after a repo update or cleanly back a feature out.
@@ -414,7 +445,52 @@ uses a live check where deterministic and otherwise an install receipt under
 `${XDG_STATE_HOME:-~/.local/state}/isc/receipts/`; a component without a reversal
 step simply clears that receipt on uninstall.
 
-## Disclaimer
+## Frequently asked questions about Linux TTS hooks
+
+### Can I use the TTS engine without Agent Command Center?
+
+Yes. The `agent-tts` engine installs and speaks independently; when the optional
+tracker executable is present, hooks use it for shared titles and task summaries.
+
+### Which coding agents get native notification hooks?
+
+The installer provides native lifecycle hooks for Codex, Claude Code, Cline,
+and Grok. OpenCode speech is tracker-driven, and this installer does not add
+native OpenCode hooks.
+
+### Does `--prepare-speech` install the Kokoro runtime?
+
+Yes. `bash install.sh --prepare-speech` provisions the isolated CPU runtime and
+verified Kokoro model and voice files before synchronizing detected hooks;
+`--sync-harnesses` refreshes hooks without preparing those assets.
+
+### Does the TTS installer replace or install the coding-agent binaries?
+
+It never replaces or symlinks the `codex` or `claude` binaries. Optional native
+CLI installation is delegated to `linux_codex_claude_code_setup`; the
+`--prepare-speech` path does not install those CLIs.
+
+### Are Windows and macOS audio playback supported?
+
+No compatibility claim is made for Windows or macOS playback. The Python engine
+is largely portable, but the playback backend is Linux-specific and those
+platforms are untested.
+
+### Why can playback logs succeed while no sound is audible?
+
+PipeWire and PulseAudio keep a separate Agent TTS stream volume. Check that
+stream and the selected output device in your audio mixer; a successful player
+exit confirms submission to the audio server, not speaker output.
+
+## Contributing
+
+This repository is maintained as a private project. Coordinate proposed changes
+with the owner, keep changes focused, and preserve the standalone engine,
+idempotent hook setup, and unrelated user-authored configuration.
+
+## License and disclaimer
+
+This project is licensed under the [MIT License](LICENSE.md).
 
 This software is provided under the MIT License on an **“as is”** basis, without warranties of any kind. To the maximum extent permitted by applicable law, the authors and copyright holders shall not be liable for any claims, damages, losses, or other liability arising from the use of this software.
 
@@ -424,7 +500,9 @@ The authors and copyright holders make no guarantees regarding security, reliabi
 
 This notice is intended to clarify the nature of the project and does not impose additional restrictions beyond the MIT License.
 
-### Speech plays silently despite successful playback logs
+## Troubleshooting Linux TTS playback
+
+### Why does speech play silently even when playback logs succeed?
 
 PipeWire and PulseAudio playback use the **Agent TTS** application identity and
 Notification role. This gives speech its own saved stream volume instead of
@@ -433,6 +511,8 @@ is unmuted). Check the Agent TTS stream and selected output in your audio mixer
 if speech is still inaudible; a successful player exit confirms submission to
 the audio server, not audible output from the speakers. Reinstall the `engine`
 component after updating playback code: `bash install.sh --select engine`.
+
+## Lifecycle hook behavior notes
 
 Child `SubagentStop` hooks are intentionally silent: they inherit their parent's
 tracker token but do not mean the parent task is done. This also applies to

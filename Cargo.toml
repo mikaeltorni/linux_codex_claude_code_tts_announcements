@@ -2,7 +2,11 @@
 name = "agent-tts"
 version = "0.1.0"
 edition = "2021"
-description = "Agent TTS command"
+description = "Linux Codex/Claude Code TTS Announcements is a Linux TTS hook engine that speaks lifecycle updates for developers using coding agents."
+license = "MIT"
+repository = "https://github.com/mikaeltorni/linux_codex_claude_code_tts_announcements"
+readme = "README.md"
+keywords = ["text-to-speech", "ai-agents", "linux", "claude-code", "codex"]
 
 [[bin]]
 name = "agent-tts"
