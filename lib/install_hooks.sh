@@ -736,6 +736,21 @@ tts_prepare_providers() {
   return "$status"
 }
 
+# Prepare user-local synthesis and verified models without requiring ACC.
+# Parameters: none; TTS_INSTALL_SPEECH_RUNTIME=0 explicitly skips downloads.
+# Returns: zero when ready or explicitly skipped; installation failure otherwise.
+tts_install_speech_runtime() {
+  printf 'parameters=none\n' >&2
+  local status=0
+  if [ "${TTS_INSTALL_SPEECH_RUNTIME:-1}" != 0 ]; then
+    PYTHONPATH="$SCRIPT_DIR/lib" python3 -m tts_announcements.speech_runtime \
+      --home "$(tts_target_home)" --root "$(tts_install_root)" \
+      --requirements "$SCRIPT_DIR/requirements-speech.txt" || status=$?
+  fi
+  printf '%s\n' "$status" >&2
+  return "$status"
+}
+
 # Install the optional Codex CLI through its native owner.
 # Parameters: none.
 # Returns: delegated installer status.

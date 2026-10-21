@@ -1105,13 +1105,11 @@ def resolve_tts_dir(codex_home: Path) -> Path:
     not own duplicate model files. They therefore reuse the canonical Codex TTS
     assets after checking their own home and ``ATTS_MODEL_DIR``.
 
-    Args:
-        codex_home: Runtime-specific home passed by the notify hook.
-
-    Returns:
-        The first directory containing both required assets, or the runtime's
-        ``tts`` directory so the caller can log a deterministic missing path.
+    Parameters: codex_home - runtime-specific home passed by the notify hook.
+    Returns: first complete configured, legacy or installed-owner model directory;
+        the runtime's tts directory when no assets exist.
     """
+    print(f'codex_home={codex_home}', file=sys.stderr)
     explicit = _first_env("ATTS_MODEL_DIR")
     candidates = []
     if explicit:
@@ -1121,6 +1119,7 @@ def resolve_tts_dir(codex_home: Path) -> Path:
             codex_home / "tts",
             Path.home() / ".codex" / "tts",
             Path.home() / ".codex-qwen" / "tts",
+            Path(__file__).resolve().parents[2] / 'models',
         ]
     )
     seen: set[Path] = set()
@@ -1131,8 +1130,26 @@ def resolve_tts_dir(codex_home: Path) -> Path:
         if (candidate / "kokoro-v1.0.onnx").is_file() and (
             candidate / "voices-v1.0.bin"
         ).is_file():
+            print(candidate, file=sys.stderr)
             return candidate
-    return codex_home / "tts"
+    result = codex_home / 'tts'
+    print(result, file=sys.stderr)
+    return result
+
+
+def kokoro_launcher():
+    """Reuse the installed locked runtime before the legacy uvx path.
+
+    Parameters: none.
+    Returns: the synthesis command prefix, or an empty list when unavailable.
+    """
+    print('parameters=none', file=sys.stderr)
+    installed = Path(__file__).resolve().parents[2] / 'speech-runtime/bin/kokoro-tts'
+    uvx = resolve_uvx()
+    result = [str(installed)] if installed.is_file() else (
+        [uvx, '--python', '3.12', '--from', 'kokoro-tts', 'kokoro-tts'] if uvx else [])
+    print(result, file=sys.stderr)
+    return result
 
 
 def gpu_runtime_dir() -> Path:
@@ -1275,18 +1292,23 @@ def speak_with_kokoro(
 ) -> bool:
     """Generate and play speech with Kokoro TTS.
 
-    The Kokoro model assets are read from ``<codex_home>/tts``; generated clips
-    are cached under the ATTS state directory. ``ignore_silent`` is forwarded to
-    :func:`play_audio` so the ``silent`` toggle can voice its own confirmation.
+    Parameters: text - sentence to synthesize; voice - Kokoro voice ID;
+        codex_home - runtime-specific configuration home; play - play the result;
+        ignore_silent - allow the silent toggle's confirmation to play.
+    Returns: whether cached or generated audio was successfully produced and,
+        when requested, played. Configured and installed-owner model paths apply.
     """
-    uvx = resolve_uvx()
-    if not text or not voice or not uvx:
-        LOGGER.info(f"kokoro skipped text={bool(text)} voice={voice!r} uvx={bool(uvx)}")
+    print(f'text={text}, voice={voice}, codex_home={codex_home}, play={play}, ignore_silent={ignore_silent}', file=sys.stderr)
+    launcher = kokoro_launcher()
+    if not text or not voice or not launcher:
+        LOGGER.info(f"kokoro skipped text={bool(text)} voice={voice!r} uvx={bool(launcher)}")
+        print(False, file=sys.stderr)
         return False
 
     tts_dir = resolve_tts_dir(codex_home)
     if not (tts_dir / "kokoro-v1.0.onnx").is_file() or not (tts_dir / "voices-v1.0.bin").is_file():
         LOGGER.info(f"kokoro missing files in {tts_dir}")
+        print(False, file=sys.stderr)
         return False
 
     speed = current_tts_speed()
@@ -1306,8 +1328,11 @@ def speak_with_kokoro(
     if audio_path.is_file() and audio_path.stat().st_size > 0:
         LOGGER.info(f"using cached {audio_path} voice={voice} text={text!r}")
         if not play:
+            print(True, file=sys.stderr)
             return True
-        return play_audio(audio_path, ignore_silent=ignore_silent)
+        result = play_audio(audio_path, ignore_silent=ignore_silent)
+        print(result, file=sys.stderr)
+        return result
     lock_path = audio_dir / ".locks" / f"{audio_path.name}.lock"
     with _exclusive_file_lock(lock_path, "cache"):
         # A sibling process may have finished while this process waited.
@@ -1325,12 +1350,7 @@ def speak_with_kokoro(
                 raw_audio_path if abs(gain_db) >= 0.0005 else generated_audio_path
             )
             command = [
-                uvx,
-                "--python",
-                "3.12",
-                "--from",
-                "kokoro-tts",
-                "kokoro-tts",
+                *launcher,
                 str(input_path),
                 str(kokoro_output),
                 "--voice",
@@ -1367,6 +1387,7 @@ def speak_with_kokoro(
                         if device == "cuda":
                             LOGGER.warning("kokoro CUDA synthesis timed out; retrying on CPU")
                             continue
+                        print(False, file=sys.stderr)
                         return False
                     except subprocess.CalledProcessError as exc:
                         LOGGER.info(
@@ -1378,9 +1399,11 @@ def speak_with_kokoro(
                         if device == "cuda":
                             LOGGER.warning("kokoro CUDA synthesis failed; retrying on CPU")
                             continue
+                        print(False, file=sys.stderr)
                         return False
                     except Exception as exc:
                         LOGGER.info("kokoro exception device=%s: %s", device, exc)
+                        print(False, file=sys.stderr)
                         return False
                     if not kokoro_output.is_file() or kokoro_output.stat().st_size == 0:
                         LOGGER.warning(
@@ -1391,10 +1414,12 @@ def speak_with_kokoro(
                         if device == "cuda":
                             LOGGER.warning("kokoro CUDA output missing; retrying on CPU")
                             continue
+                        print(False, file=sys.stderr)
                         return False
                     completed_device = device
                     break
                 if not completed_device:
+                    print(False, file=sys.stderr)
                     return False
 
                 if abs(gain_db) >= 0.0005:
@@ -1404,6 +1429,7 @@ def speak_with_kokoro(
                             LOGGER.info("using unamplified fallback for %s", audio_path)
                         except Exception as exc:
                             LOGGER.info(f"audio fallback failed: {exc}")
+                            print(False, file=sys.stderr)
                             return False
                 # The temporary output lives on the same filesystem as the
                 # cache, so replace publishes a complete WAV atomically.
@@ -1420,8 +1446,11 @@ def speak_with_kokoro(
             finally:
                 shutil.rmtree(work_dir, ignore_errors=True)
     if not play:
+        print(True, file=sys.stderr)
         return True
-    return play_audio(audio_path, ignore_silent=ignore_silent)
+    result = play_audio(audio_path, ignore_silent=ignore_silent)
+    print(result, file=sys.stderr)
+    return result
 
 
 # ── High-level speak entrypoints used by the CLI ──────────────────────────────

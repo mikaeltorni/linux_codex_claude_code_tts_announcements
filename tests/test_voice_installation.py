@@ -36,6 +36,7 @@ def run_manual(home, keys, checkout=ROOT, providers="none", owner=None):
              'ISC_FUNCTIONS_DIR': str(FRAMEWORK), 'TTS_SKIP_SYSTEMD': '1',
              'ATTS_INSTALL_GPU_RUNTIME': '0', 'TTS_LOG_DIR': str(home / 'logs'),
              'TTS_INSTALL_HARNESSES': providers,
+             'TTS_INSTALL_SPEECH_RUNTIME': '0',
              **({'TTS_CLI_SETUP_DIR': str(owner)} if owner is not None else {})},
     )
     os.close(slave)

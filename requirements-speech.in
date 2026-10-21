@@ -1,0 +1,2 @@
+# Resolve with uv pip compile --generate-hashes --exclude-newer '24 hours' --python-version 3.12.
+kokoro-tts==2.3.2

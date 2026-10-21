@@ -21,7 +21,7 @@ source "$INSTALL_LIB"
 # component commands still resolve the framework from its single owner.
 TTS_STANDALONE=0
 case "${1:-}" in
-  --sync-harnesses|--disable-harnesses|--install-harnesses|--install-harnesses=*) TTS_STANDALONE=1 ;;
+  --sync-harnesses|--prepare-speech|--disable-harnesses|--install-harnesses|--install-harnesses=*) TTS_STANDALONE=1 ;;
   "") if [ -t 0 ] && [ -t 1 ]; then TTS_STANDALONE=1; fi ;;
 esac
 # A sudo-driven master already provides the shared target-user helper.
@@ -120,6 +120,11 @@ fi
 # Returns: zero after successful installation or cancellation.
 main() {
   printf 'parameters=%s\n' "$*" >&2
+  if [ "${1:-}" = --prepare-speech ]; then
+    if [ "$#" -ne 1 ]; then printf 'Usage: bash install.sh --prepare-speech\n2\n' >&2; return 2; fi
+    tts_install_speech_runtime
+    set -- --sync-harnesses
+  fi
   case "${1:-}" in
     --install-harnesses|--install-harnesses=*)
       local selection status=0
@@ -128,6 +133,7 @@ main() {
       else printf 'Usage: bash install.sh --install-harnesses {codex,claude,missing,none}\n' >&2; return 2; fi
       tts_prepare_providers "$selection" || status=$?
       if [ "$status" -ne 0 ]; then printf '%s\n' "$status" >&2; return "$status"; fi
+      tts_install_speech_runtime
       export PATH="$(tts_target_home)/.local/bin:$PATH"
       set -- --sync-harnesses
       ;;
@@ -153,6 +159,7 @@ main() {
     tts_prepare_providers "${TTS_INSTALL_HARNESSES:-ask}" || status=$?
     if [ "$status" -eq 130 ]; then printf '0\n' >&2; return 0; fi
     if [ "$status" -ne 0 ]; then printf '%s\n' "$status" >&2; return "$status"; fi
+    tts_install_speech_runtime
     export PATH="$(tts_target_home)/.local/bin:$PATH"
     if [ ! -f "$(tts_event_config_file)" ]; then export TTS_MANUAL_EVENTS_NEW=1; fi
     ensure_tts_core
@@ -176,6 +183,7 @@ case "${1:-}" in
     printf '  --install-harnesses missing      Install only missing Codex/Claude CLIs.\n'
     printf '  --install-harnesses none         Skip native CLI installation; configure detected harnesses.\n'
     printf '  --sync-harnesses     Apply hooks to detected harnesses using saved voices, without prompts.\n'
+    printf '  --prepare-speech     Install verified Kokoro models and runtime, then sync harness hooks.\n'
     printf '  --disable-harnesses  Remove managed hooks and disable automatic reconciliation; retain voices.\n'
     component_main --help; exit $? ;;
   --list-components|--export-selection|--detect|--uninstall|--uninstall=*) component_main "$@"; exit $? ;;
