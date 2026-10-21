@@ -209,7 +209,12 @@ and terminal titles, and unbounded text previously aborted the launch with
 ## Installation
 
 ```bash
-bash install.sh              # terminal: detect harnesses and choose each voice with arrows
+bash install.sh              # terminal: offer missing Codex/Claude, then choose voices
+bash install.sh --install-harnesses codex,claude # install both native CLIs and configure TTS
+bash install.sh --install-harnesses codex  # install Codex only, then sync detected hooks
+bash install.sh --install-harnesses claude # install Claude only, then sync detected hooks
+bash install.sh --install-harnesses missing # install only missing native CLIs, then sync
+bash install.sh --install-harnesses none # skip CLI installation, sync detected hooks
 bash install.sh --sync-harnesses  # detected harnesses, saved voices, no prompts
 bash install.sh --disable-harnesses # remove managed hooks; retain voice choices
 tts-reconcile                # refresh enabled hooks without building/downloading
@@ -219,7 +224,56 @@ bash install.sh --list-components
 bash install.sh --select engine,claude_stop   # install exactly these
 ```
 
-On a terminal, `bash install.sh` detects supported command names on `PATH`
+On a terminal, `bash install.sh` first offers **skip** or **install** for each
+missing Codex/Claude executable. Configuration directories alone do not count
+as an installed native CLI. Skip is preselected; choose with the arrow keys and
+Enter, or press `q` to cancel before installing either provider. Both choices
+are collected before delegation. Cancelling the later voice selection leaves
+already-installed native CLIs in place and preserves voice choices and hooks.
+Set `TTS_INSTALL_HARNESSES=none` to omit these installation questions, or use
+`missing`, `codex`, `claude`, or `codex,claude` to select them before interactive
+voice selection; the default is `ask`.
+
+Native CLI installation belongs to
+[`linux_codex_claude_code_setup`](https://github.com/mikaeltorni/linux_codex_claude_code_setup).
+This installer delegates its barebones `codex_cli` / `claude_code` components,
+then verifies each selected command with `--version` before configuring TTS.
+It reuses a sibling or `~/projects/linux_codex_claude_code_setup` checkout,
+or clones that repository when absent. Private repositories require configured
+Git credentials or a transferred checkout; the provider repository was private
+during the October 2026 VM verification, so anonymous cloning was unavailable.
+`TTS_CLI_SETUP_DIR=/path/to/checkout` explicitly selects an existing checkout;
+`TTS_CLI_SETUP_REPOSITORY` overrides the clone URL. No credentials are copied
+or requested by the TTS installer.
+
+For a fresh Ubuntu machine, install the optional provider bootstrap prerequisites
+separately, then run the TTS installer as your normal desktop user:
+
+```bash
+sudo apt-get install -y git ca-certificates curl build-essential nodejs npm
+bash install.sh --install-harnesses codex,claude
+export PATH="$HOME/.local/bin:$PATH"
+hash -r
+codex --version
+claude --version
+```
+
+The owner bootstraps a user-local Rust toolchain when needed and persists
+`~/.local/bin` in future Bash/login shells. The default `TTS_CODEX_SOURCE=npm`
+uses the official Codex npm package; `TTS_CODEX_SOURCE=fork` delegates the
+owner's local-fork build path and requires its additional build dependencies
+and fork access. CLI sign-in remains a separate user action. These steps install
+CLIs and hooks; speech still needs the synthesis/tracker prerequisites above.
+
+The standalone terminal, `--install-harnesses`, `--sync-harnesses`, and
+`--disable-harnesses` paths do not need the shared component framework when run
+as a normal user. Legacy component commands and sudo-chain targeting still use
+that framework. `--install-harnesses=VALUE` also accepts the selectors above;
+`ask` is accepted with a real terminal. Unattended calls should use explicit
+providers, `missing`, or `none`. Delegated failures propagate before TTS hooks
+are enabled; provider installation itself may already have made changes.
+
+Voice selection detects supported command names on `PATH`
 and existing configuration homes: Codex (including `.codex-account-N`), Claude
 Code, Qwen/Local, Cline, Grok, OpenRouter, NVIDIA and OpenCode. Use the up/down
 arrows to choose a voice and Enter to confirm each harness family; `q` or Ctrl+C
@@ -258,6 +312,8 @@ that core**, so the program works no matter which subset you pick.
 
 | Component | What it installs |
 |---|---|
+| `codex_cli` | optional, default-off native Codex CLI through the setup owner |
+| `claude_cli` | optional, default-off native Claude Code CLI through the setup owner |
 | `engine` | `agent-tts` speech engine + `~/.local/bin/agent-tts` symlink |
 | `hook_files` | notify hook code under `~/.local/share/codex-claude-tts-announcements/` |
 | `boot_prewarm` | login-time `agent-tts-prewarm.service` user unit |
