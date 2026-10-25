@@ -116,7 +116,7 @@ case "${1:-}" in
     printf '  --sync-harnesses     Apply hooks to detected harnesses using saved voices, without prompts.\n'
     printf '  --prepare-speech     Install verified Kokoro models and runtime, then sync harness hooks.\n'
     printf '  --disable-harnesses  Remove managed hooks and disable automatic reconciliation; retain voices.\n'
-    component_main --help; exit $? ;;
+    component_main "$@"; exit $? ;;
   --list-components|--export-selection|--detect|--uninstall|--uninstall=*) component_main "$@"; exit $? ;;
 esac
 
