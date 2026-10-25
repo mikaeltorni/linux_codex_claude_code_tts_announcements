@@ -11,81 +11,24 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
 
-def test_standalone_checkout_clones_private_component_framework(tmp_path):
-    """A checkout without siblings can bootstrap the private framework via Git."""
-    checkout = tmp_path / "standalone/tts-announcements"
-    shutil.copytree(
-        ROOT,
-        checkout,
-        ignore=shutil.ignore_patterns(".git", ".log", ".pytest_cache", "__pycache__"),
-    )
-    framework = tmp_path / "private-framework"
-    framework.mkdir()
-    (framework / "component_loader.sh").write_text(
-        "#!/usr/bin/env bash\n"
-        "isc_activate_components() { source \"$ISC_FUNCTIONS_DIR/component_runtime.sh\"; }\n",
-        encoding="utf-8",
-    )
-    (framework / "component_runtime.sh").write_text(
-        "#!/usr/bin/env bash\n"
-        "component_main() {\n"
-        "  local entry id label default rest\n"
-        "  case \"${1:-}\" in\n"
-        "    --list-components)\n"
-        "      for entry in \"${ISC_COMPONENTS[@]}\"; do\n"
-        "        IFS='|' read -r id label default rest <<<\"$entry\"\n"
-        "        printf '%s\\t%s\\t%s\\n' \"$id\" \"$label\" \"$default\"\n"
-        "      done\n"
-        "      ;;\n"
-        "  esac\n"
-        "}\n",
-        encoding="utf-8",
-    )
-    subprocess.run(
-        ["git", "init", "-q", "-b", "master"],
-        cwd=framework,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "add", "component_loader.sh", "component_runtime.sh"],
-        cwd=framework,
-        check=True,
-    )
-    subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=TTS Test",
-            "-c",
-            "user.email=tts-test@example.invalid",
-            "commit",
-            "-qm",
-            "test framework",
-        ],
-        cwd=framework,
-        check=True,
-    )
-    home = tmp_path / "home"
+def test_standalone_checkout_uses_packaged_component_framework(tmp_path):
+    """Discover speech components without a private framework clone.
+
+    Parameters: tmp_path - isolated checkout, home and cache directory.
+    Returns: None.
+    """
+    print(f'tmp_path={tmp_path}')
+    checkout = tmp_path / 'standalone/tts-announcements'
+    shutil.copytree(ROOT, checkout, ignore=shutil.ignore_patterns('.git', '.log', '.pytest_cache', '__pycache__', 'tmp', 'target', 'dist'))
+    home = tmp_path / 'home'
     home.mkdir()
-    cache = tmp_path / "cache"
-
-    result = subprocess.run(
-        ["bash", str(checkout / "install.sh"), "--list-components"],
-        cwd=checkout,
-        env={
-            "HOME": str(home),
-            "XDG_CACHE_HOME": str(cache),
-            "ISC_FUNCTIONS_GIT_URL": str(framework),
-            "PATH": "/usr/bin:/bin",
-        },
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
+    cache = tmp_path / 'cache'
+    result = subprocess.run(['bash', str(checkout/'install.sh'), '--list-components'], cwd=checkout, env={'HOME':str(home), 'XDG_CACHE_HOME':str(cache), 'ISC_FUNCTIONS_GIT_URL':str(tmp_path/'missing-private-framework'), 'PATH':'/usr/bin:/bin'}, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
-    assert "engine\tAgent TTS (agent-tts) speech engine\ton" in result.stdout
-    assert list(cache.rglob("component_loader.sh"))
+    assert 'engine\tAgent TTS (agent-tts) speech engine\ton' in result.stdout
+    assert not list(cache.rglob('component_loader.sh'))
+    assert (checkout/'.installer-support/component_runtime.sh').is_file()
+    print(None)
 
 
 def test_installer_writes_config_hooks_without_replacing_binaries(tmp_path):
