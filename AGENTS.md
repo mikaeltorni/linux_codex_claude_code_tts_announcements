@@ -39,7 +39,7 @@ from Qwen; preserve that separation when touching voice defaults.
 # Install wiring and idempotent migration
 
 This repository is **clone-only**: the master clones it first, and Agent Command
-Center installs it through its recommended (default-on) `tts_announcements`
+Center installs it through its optional (default-off) `tts_announcements`
 component. Do not add it to the master's direct `INSTALL_REPOS`.
 
 Hook installation must stay idempotent *and* migrate configs written by earlier
