@@ -1460,18 +1460,20 @@ def default_codex_home() -> Path:
 
 
 def short_model_announcement(text: str) -> str:
-    """Shorten a leading named GPT model in announcement ``text``.
+    """Shorten a leading named GPT model while preserving the announcement body.
 
-    Accept raw labels and already-humanized names from existing sessions.
-    Match only the model sentence prefix so task text and older GPT names
-    remain intact. Both synthesis backends receive the same shortened text.
+    Parameters: text - raw or humanized model-prefixed announcement.
+    Returns: announcement with a shortened recognized model prefix.
     """
-    return re.sub(
-        r"^GPT[ -]+(?:5(?:\.| point )6[ -]+(Luna|Terra|Sol)|6[ -]+(Astra))(?=\.(?:\s|$)|$)",
-        lambda match: (match.group(1) or match.group(2)).capitalize(),
+    print(f"text={text}", file=sys.stderr)
+    result = re.sub(
+        r"^GPT[ -]+(?:5(?:\.| point )6[ -]+(Luna|Terra|Sol)|6(?:\.| point )[12][ -]+(Sol|Astra|Terra)|6[ -]+(Astra))(?=\.(?:\s|$)|$)",
+        lambda match: next(group for group in match.groups() if group).capitalize(),
         text,
         flags=re.IGNORECASE,
     )
+    print(result, file=sys.stderr)
+    return result
 
 
 def speak(

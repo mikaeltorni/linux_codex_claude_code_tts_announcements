@@ -1077,3 +1077,29 @@ def test_pulse_playback_has_dedicated_notification_identity(engine, monkeypatch,
     assert calls == [["/usr/bin/paplay", "--client-name=Agent TTS",
                       "--property=application.id=org.agent-tts",
                       "--property=media.role=notification", str(audio)]]
+
+
+@pytest.mark.parametrize("model,expected", [
+    ("GPT 6 point 2 Sol", "Sol"),
+    ("GPT-6.2-Sol", "Sol"),
+    ("GPT 6 point 2 Astra", "Astra"),
+    ("GPT-6.2-Astra", "Astra"),
+    ("GPT 6 point 1 Sol", "Sol"),
+])
+@pytest.mark.parametrize("kokoro_ok", [True, False])
+def test_speak_shortens_current_codex_models(engine, monkeypatch, model, expected, kokoro_ok):
+    """Announce model names consistently through both speech backends.
+
+    Parameters: engine - isolated TTS engine; monkeypatch - scoped mocks; model - observed label;
+        expected - spoken name; kokoro_ok - whether the primary backend succeeds.
+    Returns: None.
+    """
+    print(f"engine={engine} monkeypatch={monkeypatch} model={model} expected={expected} kokoro_ok={kokoro_ok}")
+    captured = []
+    monkeypatch.setattr(engine, "with_workspace_suffix", lambda text, workspace: text)
+    monkeypatch.setattr(engine, "speak_with_kokoro", lambda text, *args, **kwargs: captured.append(text) or kokoro_ok)
+    monkeypatch.setattr(engine, "fallback_speak", lambda text, **kwargs: captured.append(text) or True)
+    body = ". Project demo finished. Discuss GPT 6 Astra next"
+    assert engine.speak(model + body, "af_heart") is True
+    assert captured == [expected + body] * (1 if kokoro_ok else 2), model
+    print(None)
