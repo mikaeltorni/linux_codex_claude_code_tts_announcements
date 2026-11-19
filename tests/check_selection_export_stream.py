@@ -71,4 +71,14 @@ exit 97
     document = json.loads(data[len(prefix):])
     assert document['scope'] == 'standalone' and isinstance(document['components'],dict),document
     assert not effects.exists(),effects.read_text() if effects.exists() else ''
+    # Hub advanced discovery expects machine-readable output without installer effects.
+    before_queries = {path.relative_to(home) for path in home.rglob('*')}
+    for query in ('--list-configurable-components', '--list-select-configure-components',
+                  '--list-component-config-values'):
+        result = subprocess.run(['bash', str(checkout/'install.sh'), query], cwd=checkout,
+                                env=environment, capture_output=True, text=True, timeout=40)
+        assert result.returncode == 0, (query, result.stderr)
+        assert result.stdout == '', (query, result.stdout)
+        assert {path.relative_to(home) for path in home.rglob('*')} == before_queries, query
+        assert not effects.exists(), (query, effects.read_text())
 print('PASS: public export preserves caller output, valid JSON and isolated application state')

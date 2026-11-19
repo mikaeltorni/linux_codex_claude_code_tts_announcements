@@ -99,9 +99,7 @@ main() {
     printf '0\n' >&2
     return 0
   fi
-  tts_msg "Installing Codex/Claude Code TTS announcement hooks"
   component_main "$@"
-  tts_msg "TTS announcement hooks installed."
   printf '0\n' >&2
 }
 
