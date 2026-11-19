@@ -11,6 +11,27 @@
 ISC_REPO_NAME="linux_codex_claude_code_tts_announcements"
 ISC_REPO_LABEL="Codex/Claude Code/Cline/Grok TTS announcements"
 
+ISC_PREFLIGHT=tts_log_install_start
+ISC_POSTFLIGHT=tts_log_install_finish
+
+# Announce the start of component installation through the shared install lifecycle.
+# Parameters: none. Returns: zero after reporting the start.
+tts_log_install_start() {
+  printf 'parameters=none\n' >&2
+  tts_msg "Installing Codex/Claude Code TTS announcement hooks"
+  printf '0\n' >&2
+  return 0
+}
+
+# Announce the end of component installation through the shared install lifecycle.
+# Parameters: none. Returns: zero after reporting the finish.
+tts_log_install_finish() {
+  printf 'parameters=none\n' >&2
+  tts_msg "TTS announcement hooks installed."
+  printf '0\n' >&2
+  return 0
+}
+
 # Every individual notify hook is its own selectable, optional component so a
 # user can wire up exactly the runtimes and lifecycle events they use. The
 # `engine` and `hook_files` core stay default-on, and each hook component also
